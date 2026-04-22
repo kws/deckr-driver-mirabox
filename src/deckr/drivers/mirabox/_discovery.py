@@ -1,0 +1,139 @@
+from contextlib import asynccontextmanager
+from typing import Any
+import hid
+import anyio
+from deckr.drivers.mirabox._device import launch_device
+import logging
+from deckr.hardware.events import DeviceConnectedEvent, DeviceDisconnectedEvent
+
+logger = logging.getLogger(__name__)
+
+
+def _physical_hid_key(d: dict[str, Any]) -> tuple[Any, ...]:
+    """Group HID enumerate rows that share one USB device."""
+    serial = d.get("serial_number")
+    if serial is None:
+        serial = ""
+    return (d.get("vendor_id"), d.get("product_id"), serial)
+
+
+def _hid_interface_sort_key(d: dict[str, Any]) -> tuple[Any, Any]:
+    """Prefer lower interface_number (primary / key display is usually interface 0)."""
+    iface = d.get("interface_number")
+    if iface is None:
+        iface = 999
+    return (iface, d.get("path") or b"")
+
+
+@asynccontextmanager
+async def discover_mirabox_devices():
+    """
+    The discovery loop manages USB connections. It stores 'non' candidate paths,
+    so that these are not re-attempted on each pass of the loop. If a path disappears,
+    it is removed from the register.
+
+    If a candidate path is found, and attempt is made to open it. If successfully opened, then
+    a connection event is sent to the event stream.
+
+    The component is managed, and when the device is stopped, a disconnected event is sent and it
+    is removed from the register.
+    """
+    send_stream, receive_stream = anyio.create_memory_object_stream[str](
+        max_buffer_size=100
+    )
+    discovery_send, discovery_receive = anyio.create_memory_object_stream[Any](
+        max_buffer_size=100
+    )
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(discover_loop, discovery_send)
+        tg.start_soon(launcher_loop, discovery_receive, send_stream)
+        yield receive_stream
+
+
+async def discover_loop(send_stream: anyio.abc.ByteStream):
+    path_register: set[bytes] = set()
+    while True:
+        rows = list(hid.enumerate())
+        devices = {d["path"]: d for d in rows}
+        seen_paths = set(devices.keys())
+
+        groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for d in rows:
+            groups.setdefault(_physical_hid_key(d), []).append(d)
+        canonical_path = {
+            k: min(members, key=_hid_interface_sort_key)["path"]
+            for k, members in groups.items()
+        }
+
+        for path, device in devices.items():
+            if path in path_register:
+                continue
+            if canonical_path[_physical_hid_key(device)] != path:
+                logger.info(
+                    "Skipping HID path %s (canonical interface for this device is %s)",
+                    path,
+                    canonical_path[_physical_hid_key(device)],
+                )
+                continue
+            await send_stream.send(device)
+        path_register = seen_paths
+        await anyio.sleep(1)
+
+
+async def launcher_loop(
+    receive_stream: anyio.abc.ByteStream, send_stream: anyio.abc.ObjectSendStream[Any]
+):
+    connected_device_ids: set[str] = set()
+
+    async with anyio.create_task_group() as tg:
+        async for device in receive_stream:
+            tg.start_soon(device_loop, device, send_stream, connected_device_ids)
+
+
+async def device_loop(
+    device: dict[str, Any],
+    send_stream: anyio.abc.ObjectSendStream[Any],
+    connected_device_ids: set[str],
+):
+    cancelled = anyio.get_cancelled_exc_class()
+    device_id = None
+
+    try:
+        teardown_control: dict[str, bool] = {}
+        async with launch_device(
+            device["path"], teardown_control=teardown_control
+        ) as my_device:
+            if my_device is None:
+                return
+
+            device_id = my_device.id
+
+            if device_id in connected_device_ids:
+                logger.info(
+                    "Device %s already connected (duplicate HID interface %s), skipping",
+                    device_id,
+                    device["path"],
+                )
+                # Avoid clear_key/refresh on exit: same physical device as primary session.
+                teardown_control["suppress_clear"] = True
+                return
+
+            connected_device_ids.add(device_id)
+            logger.info("Device connected: %s", device_id)
+            await send_stream.send(
+                DeviceConnectedEvent(device_id=device_id, device=my_device)
+            )
+            async for event in my_device.subscribe():
+                await send_stream.send(event)
+
+    except cancelled as e:
+        raise e
+    except Exception as e:
+        logger.info("Device error: %s", e)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.exception("Device error: %s", e, exc_info=True)
+
+    if device_id is not None:
+        connected_device_ids.discard(device_id)
+        await send_stream.send(DeviceDisconnectedEvent(device_id=device_id))

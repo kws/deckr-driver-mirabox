@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deckr-driver-mirabox"
+version = "0.1.0"
+description = "Deckr MiraBox StreamDock driver and setup utilities"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Kaj Siebert", email = "kaj@k-si.com" }
+]
+requires-python = ">=3.11,<4.0.0"
+dependencies = [
+    "deckr>=0.2.0,<1.0.0",
+    "cairosvg>=2.8.2,<3.0.0",
+    "click>=8.3.1,<9.0.0",
+    "hidapi>=0.15.0,<0.16.0",
+    "invariant-core==0.3.0",
+    "invariant-gfx==0.2.0",
+    "pillow>=12.1.0,<13.0.0",
+    "pyyaml>=6.0.3,<7.0.0",
+    "simpleeval>=1.0.3,<2.0.0",
+    "textual>=8.0.0,<9.0.0",
+]
+
+[project.entry-points."deckr.drivers"]
+mirabox = "deckr.drivers.mirabox:driver_factory"
+
+[project.scripts]
+mirabox-setup = "deckr_mirabox_setup.cli:cli"
+
+[project.urls]
+Documentation = "https://github.com/kws/deckr-driver-mirabox#readme"
+Homepage = "https://github.com/kws/deckr-driver-mirabox"
+Repository = "https://github.com/kws/deckr-driver-mirabox"
+"Bug Tracker" = "https://github.com/kws/deckr-driver-mirabox/issues"
+"Changelog" = "https://github.com/kws/deckr-driver-mirabox/releases"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2,<10.0.0",
+    "pytest-asyncio>=1.3.0,<2.0.0",
+    "pytest-cov>=6.0.0,<7.0.0",
+    "ruff>=0.14.14,<0.15.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/deckr", "src/deckr_mirabox_setup"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "SIM", "UP", "W"]
+ignore = ["E203", "E501", "SIM102", "SIM105"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
