@@ -1,4 +1,4 @@
 from ._device import MiraBoxDockDevice
-from ._factory import driver_factory
+from ._factory import component, driver_factory
 
-__all__ = ["MiraBoxDockDevice", "driver_factory"]
+__all__ = ["MiraBoxDockDevice", "component", "driver_factory"]

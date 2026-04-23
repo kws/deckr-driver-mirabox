@@ -1,7 +1,13 @@
 import anyio
-from deckr.drivers.mirabox._discovery import discover_mirabox_devices
 from deckr.core.component import BaseComponent, RunContext
+from deckr.core.components import (
+    ComponentContext,
+    ComponentDefinition,
+    ComponentManifest,
+)
 from deckr.core.messaging import EventBus
+
+from deckr.drivers.mirabox._discovery import discover_mirabox_devices
 
 
 class MiraboxDeviceFactory(BaseComponent):
@@ -25,3 +31,17 @@ class MiraboxDeviceFactory(BaseComponent):
 
 def driver_factory(event_bus: EventBus) -> MiraboxDeviceFactory:
     return MiraboxDeviceFactory(event_bus=event_bus)
+
+
+def component_factory(context: ComponentContext) -> MiraboxDeviceFactory:
+    return driver_factory(context.require_lane("hardware_events"))
+
+
+component = ComponentDefinition(
+    manifest=ComponentManifest(
+        component_id="deckr.drivers.mirabox",
+        config_prefix="deckr.drivers.mirabox",
+        publishes=("hardware_events",),
+    ),
+    factory=component_factory,
+)
