@@ -170,7 +170,7 @@ class MiraBoxDockDevice:
                     yield hw_event
 
     @property
-    def slots(self) -> list[hw_events.WireHWSlot]:
+    def slots(self) -> list[hw_events.HardwareSlot]:
         return self.layout.get_slots()
 
 

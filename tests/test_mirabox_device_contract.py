@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from deckr.hardware.events import WireHWDevice
+from deckr.hardware.events import HardwareDevice
 
 from deckr.drivers.mirabox._device import MiraBoxDockDevice
 
@@ -26,7 +26,7 @@ def test_mirabox_device_exposes_hid_for_hw_device_contract():
     assert device.id == "0B00:1001:0300D0785616"
     assert device.hid == "0B00:1001:0300D0785616"
 
-    info = WireHWDevice(
+    info = HardwareDevice(
         id=device.id,
         hid=device.hid,
         slots=list(device.slots),

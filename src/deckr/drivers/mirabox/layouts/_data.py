@@ -17,8 +17,8 @@ class ImageFormat(BaseModel):
     format: str
     rotation: int = 0
 
-    def to_hw_image_format(self) -> hw_events.WireHWSImageFormat:
-        return hw_events.WireHWSImageFormat(
+    def to_hw_image_format(self) -> hw_events.HardwareImageFormat:
+        return hw_events.HardwareImageFormat(
             width=self.width,
             height=self.height,
             format=self.format,
@@ -190,7 +190,7 @@ class Layout(BaseModel):
             return ("screen", [])
         return ("key", ["key_down", "key_up"])
 
-    def get_slots(self) -> list[hw_events.WireHWSlot]:
+    def get_slots(self) -> list[hw_events.HardwareSlot]:
         result = []
         for control in self.controls:
             slot_type, gestures = self._slot_type_and_gestures(control)
@@ -198,9 +198,9 @@ class Layout(BaseModel):
             if hasattr(control, "display"):
                 image_format = control.display.format.to_hw_image_format()
             result.append(
-                hw_events.WireHWSlot(
+                hw_events.HardwareSlot(
                     id=control.name,
-                    coordinates=hw_events.WireCoordinates(
+                    coordinates=hw_events.HardwareCoordinates(
                         column=control.column, row=control.row
                     ),
                     image_format=image_format,
