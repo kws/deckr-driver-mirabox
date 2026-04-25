@@ -1,19 +1,18 @@
 """MiraBox StreamDock device implementation."""
 
+import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 import anyio
-
 import deckr.hardware.events as hw_events
 
+from deckr.drivers.mirabox._protocol import DeviceProtocol, MiraBoxProtocol
 from deckr.drivers.mirabox._transport import AsyncHidTransport, descriptors_for_path
-from deckr.drivers.mirabox.layouts import search_candidates
+from deckr.drivers.mirabox.layouts import Layout, search_candidates
 from deckr.drivers.mirabox.layouts._data import Heartbeat
 from deckr.drivers.mirabox.layouts._evaluator import eval_policy
-from deckr.drivers.mirabox._protocol import DeviceProtocol, MiraBoxProtocol
-from deckr.drivers.mirabox.layouts import Layout
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +86,11 @@ class MiraBoxDockDevice:
         await self.send_payloads(payloads)
 
     async def set_image(self, slot_id: str, image: bytes) -> None:
-        """Set a slot image (HWDevice protocol method)."""
+        """Set a slot image on the private live device."""
         await self.set_key_image(slot_id, image)
 
     async def clear_slot(self, slot_id: str) -> None:
-        """Clear a slot (HWDevice protocol method)."""
+        """Clear a slot on the private live device."""
         control = self.layout.get_control_for_name(slot_id)
         if control is None:
             logger.error(f"Slot not found: {slot_id}")
@@ -163,7 +162,7 @@ class MiraBoxDockDevice:
         )
         await self.send_payloads(payloads)
 
-    async def subscribe(self) -> AsyncIterator[Any]:
+    async def subscribe(self) -> AsyncIterator[hw_events.HardwareInputMessage]:
         async with self.transport.subscribe() as stream:
             async for report in stream:
                 event = self.protocol.parse_event(report)
@@ -171,7 +170,7 @@ class MiraBoxDockDevice:
                     yield hw_event
 
     @property
-    def slots(self) -> list[hw_events.HWSlot]:
+    def slots(self) -> list[hw_events.WireHWSlot]:
         return self.layout.get_slots()
 
 

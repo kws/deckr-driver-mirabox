@@ -1,9 +1,12 @@
-from collections import namedtuple
-from pydantic import BaseModel, Field, model_validator
-from typing import Any, Generator, Optional, Union, Literal, Annotated
-from deckr.drivers.mirabox._protocol import InteractionEvent
-import deckr.hardware.events as hw_events
 import logging
+from collections import namedtuple
+from collections.abc import Generator
+from typing import Annotated, Any, Literal
+
+import deckr.hardware.events as hw_events
+from pydantic import BaseModel, Field, model_validator
+
+from deckr.drivers.mirabox._protocol import InteractionEvent
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +17,8 @@ class ImageFormat(BaseModel):
     format: str
     rotation: int = 0
 
-    def to_hw_image_format(self) -> hw_events.HWSImageFormat:
-        return hw_events.HWSImageFormat(
+    def to_hw_image_format(self) -> hw_events.WireHWSImageFormat:
+        return hw_events.WireHWSImageFormat(
             width=self.width,
             height=self.height,
             format=self.format,
@@ -29,8 +32,8 @@ class Display(BaseModel):
 
 
 class KeyEvents(BaseModel):
-    key: Optional[int] = None
-    press: Optional[int] = None
+    key: int | None = None
+    press: int | None = None
 
     @model_validator(mode="after")
     def exactly_one_field(self):
@@ -42,8 +45,8 @@ class KeyEvents(BaseModel):
 class DialEvents(BaseModel):
     clockwise: int
     counterclockwise: int
-    key: Optional[int] = None
-    press: Optional[int] = None
+    key: int | None = None
+    press: int | None = None
 
     @model_validator(mode="after")
     def exactly_one_field(self):
@@ -106,14 +109,14 @@ class ScreenControl(BaseControl):
     display: Display
 
 
-Control = Union[
-    KeyControl,
-    ButtonControl,
-    DialControl,
-    TouchDialControl,
-    TouchStripControl,
-    ScreenControl,
-]
+Control = (
+    KeyControl
+    | ButtonControl
+    | DialControl
+    | TouchDialControl
+    | TouchStripControl
+    | ScreenControl
+)
 
 DiscriminatedControl = Annotated[
     Control,
@@ -166,30 +169,28 @@ class Layout(BaseModel):
     def get_control_for_name(self, name: str) -> Control | None:
         return self._name_lookup.get(name, None)
 
-    def _slot_type_and_gestures(self, control: Control) -> tuple[str, frozenset[str]]:
+    def _slot_type_and_gestures(self, control: Control) -> tuple[str, list[str]]:
         if isinstance(control, KeyControl):
-            return ("key", frozenset({"key_down", "key_up"}))
+            return ("key", ["key_down", "key_up"])
         if isinstance(control, ButtonControl):
-            return ("button", frozenset({"key_down", "key_up"}))
+            return ("button", ["key_down", "key_up"])
         if isinstance(control, DialControl):
             return (
                 "encoder",
-                frozenset({"encoder_rotate", "encoder_down", "encoder_up"}),
+                ["encoder_down", "encoder_rotate", "encoder_up"],
             )
         if isinstance(control, TouchDialControl):
             return (
                 "touch_dial",
-                frozenset(
-                    {"encoder_rotate", "encoder_down", "encoder_up", "touch_tap"}
-                ),
+                ["encoder_down", "encoder_rotate", "encoder_up", "touch_tap"],
             )
         if isinstance(control, TouchStripControl):
-            return ("touch_strip", frozenset({"touch_swipe"}))
+            return ("touch_strip", ["touch_swipe"])
         if isinstance(control, ScreenControl):
-            return ("screen", frozenset())
-        return ("key", frozenset({"key_down", "key_up"}))
+            return ("screen", [])
+        return ("key", ["key_down", "key_up"])
 
-    def get_slots(self) -> list[hw_events.HWSlot]:
+    def get_slots(self) -> list[hw_events.WireHWSlot]:
         result = []
         for control in self.controls:
             slot_type, gestures = self._slot_type_and_gestures(control)
@@ -197,9 +198,9 @@ class Layout(BaseModel):
             if hasattr(control, "display"):
                 image_format = control.display.format.to_hw_image_format()
             result.append(
-                hw_events.HWSlot(
+                hw_events.WireHWSlot(
                     id=control.name,
-                    coordinates=hw_events.Coordinates(
+                    coordinates=hw_events.WireCoordinates(
                         column=control.column, row=control.row
                     ),
                     image_format=image_format,
@@ -211,7 +212,7 @@ class Layout(BaseModel):
 
     def to_hardware_event(
         self, event: InteractionEvent, device
-    ) -> Generator[hw_events.HardwareEvent, None, None]:
+    ) -> Generator[hw_events.HardwareInputMessage, None, None]:
         control_descriptor = self.get_control_for_event(event.button_id)
         if control_descriptor is None:
             logger.warning(f"Control not found for event: {event}")
@@ -222,28 +223,28 @@ class Layout(BaseModel):
 
         if control_descriptor.event_type == "key":
             if event.payload == 0:
-                yield hw_events.KeyUpEvent(device_id=device_id, key_id=control_name)
+                yield hw_events.KeyUpMessage(device_id=device_id, key_id=control_name)
             else:
-                yield hw_events.KeyDownEvent(device_id=device_id, key_id=control_name)
+                yield hw_events.KeyDownMessage(device_id=device_id, key_id=control_name)
         elif control_descriptor.event_type == "press":
-            yield hw_events.KeyDownEvent(device_id=device_id, key_id=control_name)
-            yield hw_events.KeyUpEvent(device_id=device_id, key_id=control_name)
+            yield hw_events.KeyDownMessage(device_id=device_id, key_id=control_name)
+            yield hw_events.KeyUpMessage(device_id=device_id, key_id=control_name)
         elif control_descriptor.event_type == "clockwise":
-            yield hw_events.DialRotateEvent(
+            yield hw_events.DialRotateMessage(
                 device_id=device_id, dial_id=control_name, direction="clockwise"
             )
         elif control_descriptor.event_type == "counterclockwise":
-            yield hw_events.DialRotateEvent(
+            yield hw_events.DialRotateMessage(
                 device_id=device_id, dial_id=control_name, direction="counterclockwise"
             )
         elif control_descriptor.event_type == "tap":
-            yield hw_events.TouchTapEvent(device_id=device_id, touch_id=control_name)
+            yield hw_events.TouchTapMessage(device_id=device_id, touch_id=control_name)
         elif control_descriptor.event_type == "left_swipe":
-            yield hw_events.TouchSwipeEvent(
+            yield hw_events.TouchSwipeMessage(
                 device_id=device_id, touch_id=control_name, direction="left"
             )
         elif control_descriptor.event_type == "right_swipe":
-            yield hw_events.TouchSwipeEvent(
+            yield hw_events.TouchSwipeMessage(
                 device_id=device_id, touch_id=control_name, direction="right"
             )
         else:

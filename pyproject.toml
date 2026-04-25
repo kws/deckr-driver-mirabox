@@ -13,7 +13,7 @@ authors = [
 ]
 requires-python = ">=3.11,<4.0.0"
 dependencies = [
-    "deckr>=0.2.0,<1.0.0",
+    "deckr>=0.3.0.dev0,<1.0.0",
     "cairosvg>=2.8.2,<3.0.0",
     "click>=8.3.1,<9.0.0",
     "hidapi>=0.15.0,<0.16.0",
@@ -45,6 +45,9 @@ dev = [
     "pytest-cov>=6.0.0,<7.0.0",
     "ruff>=0.14.14,<0.15.0",
 ]
+
+[tool.uv.sources]
+deckr = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/deckr", "src/deckr_mirabox_setup"]
