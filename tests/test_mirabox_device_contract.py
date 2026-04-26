@@ -29,8 +29,10 @@ def test_mirabox_device_exposes_hid_for_hw_device_contract():
     info = HardwareDevice(
         id=device.id,
         hid=device.hid,
+        fingerprint=device.hid,
         slots=list(device.slots),
         name=getattr(device, "name", None),
     )
     assert info.id == "0B00:1001:0300D0785616"
     assert info.hid == "0B00:1001:0300D0785616"
+    assert info.fingerprint == "0B00:1001:0300D0785616"
