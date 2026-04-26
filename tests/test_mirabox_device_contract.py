@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from deckr.hardware.events import HardwareDevice
+from deckr.hardware.messages import HardwareDevice
 
 from deckr.drivers.mirabox._device import MiraBoxDockDevice
 

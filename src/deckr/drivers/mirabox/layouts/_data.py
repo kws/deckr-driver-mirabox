@@ -3,7 +3,7 @@ from collections import namedtuple
 from collections.abc import Generator
 from typing import Annotated, Any, Literal
 
-import deckr.hardware.events as hw_events
+import deckr.hardware.messages as hw_messages
 from pydantic import BaseModel, Field, model_validator
 
 from deckr.drivers.mirabox._protocol import InteractionEvent
@@ -17,8 +17,8 @@ class ImageFormat(BaseModel):
     format: str
     rotation: int = 0
 
-    def to_hw_image_format(self) -> hw_events.HardwareImageFormat:
-        return hw_events.HardwareImageFormat(
+    def to_hw_image_format(self) -> hw_messages.HardwareImageFormat:
+        return hw_messages.HardwareImageFormat(
             width=self.width,
             height=self.height,
             format=self.format,
@@ -190,7 +190,7 @@ class Layout(BaseModel):
             return ("screen", [])
         return ("key", ["key_down", "key_up"])
 
-    def get_slots(self) -> list[hw_events.HardwareSlot]:
+    def get_slots(self) -> list[hw_messages.HardwareSlot]:
         result = []
         for control in self.controls:
             slot_type, gestures = self._slot_type_and_gestures(control)
@@ -198,9 +198,9 @@ class Layout(BaseModel):
             if hasattr(control, "display"):
                 image_format = control.display.format.to_hw_image_format()
             result.append(
-                hw_events.HardwareSlot(
+                hw_messages.HardwareSlot(
                     id=control.name,
-                    coordinates=hw_events.HardwareCoordinates(
+                    coordinates=hw_messages.HardwareCoordinates(
                         column=control.column, row=control.row
                     ),
                     image_format=image_format,
@@ -210,9 +210,9 @@ class Layout(BaseModel):
             )
         return result
 
-    def to_hardware_event(
+    def to_hardware_input(
         self, event: InteractionEvent, device
-    ) -> Generator[hw_events.HardwareInputMessage, None, None]:
+    ) -> Generator[hw_messages.HardwareInputMessage, None, None]:
         control_descriptor = self.get_control_for_event(event.button_id)
         if control_descriptor is None:
             logger.warning(f"Control not found for event: {event}")
@@ -222,28 +222,28 @@ class Layout(BaseModel):
 
         if control_descriptor.event_type == "key":
             if event.payload == 0:
-                yield hw_events.KeyUpMessage(key_id=control_name)
+                yield hw_messages.KeyUpMessage(key_id=control_name)
             else:
-                yield hw_events.KeyDownMessage(key_id=control_name)
+                yield hw_messages.KeyDownMessage(key_id=control_name)
         elif control_descriptor.event_type == "press":
-            yield hw_events.KeyDownMessage(key_id=control_name)
-            yield hw_events.KeyUpMessage(key_id=control_name)
+            yield hw_messages.KeyDownMessage(key_id=control_name)
+            yield hw_messages.KeyUpMessage(key_id=control_name)
         elif control_descriptor.event_type == "clockwise":
-            yield hw_events.DialRotateMessage(
+            yield hw_messages.DialRotateMessage(
                 dial_id=control_name, direction="clockwise"
             )
         elif control_descriptor.event_type == "counterclockwise":
-            yield hw_events.DialRotateMessage(
+            yield hw_messages.DialRotateMessage(
                 dial_id=control_name, direction="counterclockwise"
             )
         elif control_descriptor.event_type == "tap":
-            yield hw_events.TouchTapMessage(touch_id=control_name)
+            yield hw_messages.TouchTapMessage(touch_id=control_name)
         elif control_descriptor.event_type == "left_swipe":
-            yield hw_events.TouchSwipeMessage(
+            yield hw_messages.TouchSwipeMessage(
                 touch_id=control_name, direction="left"
             )
         elif control_descriptor.event_type == "right_swipe":
-            yield hw_events.TouchSwipeMessage(
+            yield hw_messages.TouchSwipeMessage(
                 touch_id=control_name, direction="right"
             )
         else:

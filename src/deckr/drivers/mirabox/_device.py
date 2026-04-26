@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
-import deckr.hardware.events as hw_events
+import deckr.hardware.messages as hw_messages
 
 from deckr.drivers.mirabox._protocol import DeviceProtocol, MiraBoxProtocol
 from deckr.drivers.mirabox._transport import AsyncHidTransport, descriptors_for_path
@@ -162,15 +162,15 @@ class MiraBoxDockDevice:
         )
         await self.send_payloads(payloads)
 
-    async def subscribe(self) -> AsyncIterator[hw_events.HardwareInputMessage]:
+    async def subscribe(self) -> AsyncIterator[hw_messages.HardwareInputMessage]:
         async with self.transport.subscribe() as stream:
             async for report in stream:
                 event = self.protocol.parse_event(report)
-                for hw_event in self.layout.to_hardware_event(event, self):
-                    yield hw_event
+                for hw_input in self.layout.to_hardware_input(event, self):
+                    yield hw_input
 
     @property
-    def slots(self) -> list[hw_events.HardwareSlot]:
+    def slots(self) -> list[hw_messages.HardwareSlot]:
         return self.layout.get_slots()
 
 
