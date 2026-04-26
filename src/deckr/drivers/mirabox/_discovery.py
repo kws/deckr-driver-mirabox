@@ -29,7 +29,7 @@ def _hid_interface_sort_key(d: dict[str, Any]) -> tuple[Any, Any]:
 
 
 @asynccontextmanager
-async def discover_mirabox_devices(event_bus: EventBus):
+async def discover_mirabox_devices(event_bus: EventBus, *, manager_id: str):
     """
     The discovery loop manages USB connections. It stores 'non' candidate paths,
     so that these are not re-attempted on each pass of the loop. If a path disappears,
@@ -50,7 +50,13 @@ async def discover_mirabox_devices(event_bus: EventBus):
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(discover_loop, discovery_send)
-        tg.start_soon(launcher_loop, discovery_receive, send_stream, event_bus)
+        tg.start_soon(
+            launcher_loop,
+            discovery_receive,
+            send_stream,
+            event_bus,
+            manager_id,
+        )
         yield receive_stream
 
 
@@ -88,6 +94,7 @@ async def launcher_loop(
     receive_stream: anyio.abc.ByteStream,
     send_stream: anyio.abc.ObjectSendStream[Any],
     event_bus: EventBus,
+    manager_id: str,
 ):
     connected_device_ids: set[str] = set()
 
@@ -99,6 +106,7 @@ async def launcher_loop(
                 send_stream,
                 event_bus,
                 connected_device_ids,
+                manager_id,
             )
 
 
@@ -107,6 +115,7 @@ async def device_loop(
     send_stream: anyio.abc.ObjectSendStream[Any],
     event_bus: EventBus,
     connected_device_ids: set[str],
+    manager_id: str,
 ):
     cancelled = anyio.get_cancelled_exc_class()
     device_id = None
@@ -134,13 +143,16 @@ async def device_loop(
             connected_device_ids.add(device_id)
             logger.info("Device connected: %s", device_id)
             await send_stream.send(
-                hw_events.DeviceConnectedMessage(
+                hw_events.hardware_input_message(
+                    manager_id=manager_id,
                     device_id=device_id,
-                    device=hw_events.HardwareDevice(
-                        id=my_device.id,
-                        hid=my_device.hid,
-                        slots=list(my_device.slots),
-                        name=getattr(my_device, "name", None),
+                    body=hw_events.DeviceConnectedMessage(
+                        device=hw_events.HardwareDevice(
+                            id=my_device.id,
+                            hid=my_device.hid,
+                            slots=list(my_device.slots),
+                            name=getattr(my_device, "name", None),
+                        ),
                     ),
                 )
             )
@@ -151,6 +163,7 @@ async def device_loop(
                     _forward_device_events,
                     my_device,
                     send_stream,
+                    manager_id,
                 )
                 tg.start_soon(
                     _run_until_complete,
@@ -158,6 +171,7 @@ async def device_loop(
                     _apply_device_commands,
                     my_device,
                     event_bus,
+                    manager_id,
                 )
 
     except cancelled as e:
@@ -169,15 +183,28 @@ async def device_loop(
 
     if device_id is not None:
         connected_device_ids.discard(device_id)
-        await send_stream.send(hw_events.DeviceDisconnectedMessage(device_id=device_id))
+        await send_stream.send(
+            hw_events.hardware_input_message(
+                manager_id=manager_id,
+                device_id=device_id,
+                body=hw_events.DeviceDisconnectedMessage(),
+            )
+        )
 
 
 async def _forward_device_events(
     device: Any,
     send_stream: anyio.abc.ObjectSendStream[Any],
+    manager_id: str,
 ) -> None:
     async for event in device.subscribe():
-        await send_stream.send(event)
+        await send_stream.send(
+            hw_events.hardware_input_message(
+                manager_id=manager_id,
+                device_id=device.id,
+                body=event,
+            )
+        )
 
 
 async def _run_until_complete(cancel_scope, func, *args) -> None:
@@ -187,13 +214,19 @@ async def _run_until_complete(cancel_scope, func, *args) -> None:
         cancel_scope.cancel()
 
 
-async def _apply_device_commands(device: Any, event_bus: EventBus) -> None:
+async def _apply_device_commands(
+    device: Any,
+    event_bus: EventBus,
+    manager_id: str,
+) -> None:
     async with event_bus.subscribe() as stream:
         async for envelope in stream:
-            message = envelope.message
-            if not isinstance(message, hw_events.HARDWARE_COMMAND_MESSAGE_TYPES):
+            if hw_events.hardware_manager_id_from_message(envelope) != manager_id:
                 continue
-            if message.device_id != device.id:
+            if hw_events.subject_device_id(envelope.subject) != device.id:
+                continue
+            message = hw_events.hardware_body_from_message(envelope)
+            if not isinstance(message, hw_events.HARDWARE_COMMAND_MESSAGE_TYPES):
                 continue
             if isinstance(message, hw_events.SetImageMessage):
                 await device.set_image(message.slot_id, message.image)

@@ -218,34 +218,33 @@ class Layout(BaseModel):
             logger.warning(f"Control not found for event: {event}")
             return None
 
-        device_id = device.id
         control_name = control_descriptor.control.name
 
         if control_descriptor.event_type == "key":
             if event.payload == 0:
-                yield hw_events.KeyUpMessage(device_id=device_id, key_id=control_name)
+                yield hw_events.KeyUpMessage(key_id=control_name)
             else:
-                yield hw_events.KeyDownMessage(device_id=device_id, key_id=control_name)
+                yield hw_events.KeyDownMessage(key_id=control_name)
         elif control_descriptor.event_type == "press":
-            yield hw_events.KeyDownMessage(device_id=device_id, key_id=control_name)
-            yield hw_events.KeyUpMessage(device_id=device_id, key_id=control_name)
+            yield hw_events.KeyDownMessage(key_id=control_name)
+            yield hw_events.KeyUpMessage(key_id=control_name)
         elif control_descriptor.event_type == "clockwise":
             yield hw_events.DialRotateMessage(
-                device_id=device_id, dial_id=control_name, direction="clockwise"
+                dial_id=control_name, direction="clockwise"
             )
         elif control_descriptor.event_type == "counterclockwise":
             yield hw_events.DialRotateMessage(
-                device_id=device_id, dial_id=control_name, direction="counterclockwise"
+                dial_id=control_name, direction="counterclockwise"
             )
         elif control_descriptor.event_type == "tap":
-            yield hw_events.TouchTapMessage(device_id=device_id, touch_id=control_name)
+            yield hw_events.TouchTapMessage(touch_id=control_name)
         elif control_descriptor.event_type == "left_swipe":
             yield hw_events.TouchSwipeMessage(
-                device_id=device_id, touch_id=control_name, direction="left"
+                touch_id=control_name, direction="left"
             )
         elif control_descriptor.event_type == "right_swipe":
             yield hw_events.TouchSwipeMessage(
-                device_id=device_id, touch_id=control_name, direction="right"
+                touch_id=control_name, direction="right"
             )
         else:
             logger.warning(f"Unknown event type: {control_descriptor.event_type}")
