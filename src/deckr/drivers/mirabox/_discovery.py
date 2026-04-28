@@ -1,15 +1,25 @@
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import anyio
 import hid
+from deckr.contracts.messages import DeckrMessage, EndpointTarget
 from deckr.hardware import messages as hw_messages
-from deckr.transports.bus import EventBus
+from deckr.lanes import EndpointLane
 
 from deckr.drivers.mirabox._device import launch_device
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class ResetDeviceCommand:
+    pass
+
+
+DeviceCommand = DeckrMessage | ResetDeviceCommand
 
 
 def _physical_hid_key(d: dict[str, Any]) -> tuple[Any, ...]:
@@ -29,7 +39,12 @@ def _hid_interface_sort_key(d: dict[str, Any]) -> tuple[Any, Any]:
 
 
 @asynccontextmanager
-async def discover_mirabox_devices(event_bus: EventBus, *, manager_id: str):
+async def discover_mirabox_devices(
+    endpoint: EndpointLane,
+    *,
+    manager_id: str,
+    command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]] | None = None,
+):
     """
     The discovery loop manages USB connections. It stores 'non' candidate paths,
     so that these are not re-attempted on each pass of the loop. If a path disappears,
@@ -47,6 +62,8 @@ async def discover_mirabox_devices(event_bus: EventBus, *, manager_id: str):
     discovery_send, discovery_receive = anyio.create_memory_object_stream[Any](
         max_buffer_size=100
     )
+    if command_streams is None:
+        command_streams = {}
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(discover_loop, discovery_send)
@@ -54,8 +71,9 @@ async def discover_mirabox_devices(event_bus: EventBus, *, manager_id: str):
             launcher_loop,
             discovery_receive,
             send_stream,
-            event_bus,
+            endpoint,
             manager_id,
+            command_streams,
         )
         yield receive_stream
 
@@ -93,29 +111,36 @@ async def discover_loop(send_stream: anyio.abc.ByteStream):
 async def launcher_loop(
     receive_stream: anyio.abc.ByteStream,
     send_stream: anyio.abc.ObjectSendStream[Any],
-    event_bus: EventBus,
+    endpoint: EndpointLane,
     manager_id: str,
+    command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
 ):
     connected_device_ids: set[str] = set()
 
     async with anyio.create_task_group() as tg:
+        tg.start_soon(
+            _manager_command_subscription,
+            endpoint,
+            manager_id,
+            command_streams,
+        )
         async for device in receive_stream:
             tg.start_soon(
                 device_loop,
                 device,
                 send_stream,
-                event_bus,
                 connected_device_ids,
                 manager_id,
+                command_streams,
             )
 
 
 async def device_loop(
     device: dict[str, Any],
     send_stream: anyio.abc.ObjectSendStream[Any],
-    event_bus: EventBus,
     connected_device_ids: set[str],
     manager_id: str,
+    command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
 ):
     cancelled = anyio.get_cancelled_exc_class()
     device_id = None
@@ -141,6 +166,10 @@ async def device_loop(
                 return
 
             connected_device_ids.add(device_id)
+            command_send, command_receive = anyio.create_memory_object_stream[
+                DeviceCommand
+            ](max_buffer_size=100)
+            command_streams[device_id] = command_send
             logger.info("Device connected: %s", device_id)
             await send_stream.send(
                 hw_messages.hardware_input_message(
@@ -157,23 +186,27 @@ async def device_loop(
                     ),
                 )
             )
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(
-                    _run_until_complete,
-                    tg.cancel_scope,
-                    _forward_device_events,
-                    my_device,
-                    send_stream,
-                    manager_id,
-                )
-                tg.start_soon(
-                    _run_until_complete,
-                    tg.cancel_scope,
-                    _apply_device_commands,
-                    my_device,
-                    event_bus,
-                    manager_id,
-                )
+            async with command_send, command_receive:
+                try:
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(
+                            _run_until_complete,
+                            tg.cancel_scope,
+                            _forward_device_events,
+                            my_device,
+                            send_stream,
+                            manager_id,
+                        )
+                        tg.start_soon(
+                            _run_until_complete,
+                            tg.cancel_scope,
+                            _apply_device_commands,
+                            my_device,
+                            command_receive,
+                            manager_id,
+                        )
+                finally:
+                    command_streams.pop(device_id, None)
 
     except cancelled as e:
         raise e
@@ -217,25 +250,58 @@ async def _run_until_complete(cancel_scope, func, *args) -> None:
 
 async def _apply_device_commands(
     device: Any,
-    event_bus: EventBus,
+    command_stream: anyio.abc.ObjectReceiveStream[DeviceCommand],
     manager_id: str,
 ) -> None:
-    async with event_bus.subscribe() as stream:
+    async for command in command_stream:
+        if isinstance(command, ResetDeviceCommand):
+            await device.clear_key()
+            await device.refresh()
+            continue
+        envelope = command
+        ref = hw_messages.hardware_device_ref_from_message(envelope)
+        if ref != hw_messages.HardwareDeviceRef(
+            manager_id=manager_id,
+            device_id=device.id,
+        ):
+            continue
+        message = hw_messages.hardware_body_from_message(envelope)
+        if not isinstance(message, hw_messages.HARDWARE_COMMAND_MESSAGE_TYPES):
+            continue
+        if isinstance(message, hw_messages.SetImageMessage):
+            await device.set_image(message.slot_id, message.image)
+        elif isinstance(message, hw_messages.ClearSlotMessage):
+            await device.clear_slot(message.slot_id)
+        elif isinstance(message, hw_messages.SleepScreenMessage):
+            await device.sleep_screen()
+        elif isinstance(message, hw_messages.WakeScreenMessage):
+            await device.wake_screen()
+
+
+async def _manager_command_subscription(
+    endpoint: EndpointLane,
+    manager_id: str,
+    command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
+) -> None:
+    async with endpoint.subscribe() as stream:
         async for envelope in stream:
-            ref = hw_messages.hardware_device_ref_from_message(envelope)
-            if ref != hw_messages.HardwareDeviceRef(
-                manager_id=manager_id,
-                device_id=device.id,
+            if (
+                not isinstance(envelope.recipient, EndpointTarget)
+                or envelope.recipient.endpoint != endpoint.endpoint
             ):
+                continue
+            ref = hw_messages.hardware_device_ref_from_message(envelope)
+            if ref is None or ref.manager_id != manager_id:
                 continue
             message = hw_messages.hardware_body_from_message(envelope)
             if not isinstance(message, hw_messages.HARDWARE_COMMAND_MESSAGE_TYPES):
                 continue
-            if isinstance(message, hw_messages.SetImageMessage):
-                await device.set_image(message.slot_id, message.image)
-            elif isinstance(message, hw_messages.ClearSlotMessage):
-                await device.clear_slot(message.slot_id)
-            elif isinstance(message, hw_messages.SleepScreenMessage):
-                await device.sleep_screen()
-            elif isinstance(message, hw_messages.WakeScreenMessage):
-                await device.wake_screen()
+            command_stream = command_streams.get(ref.device_id)
+            if command_stream is None:
+                logger.debug(
+                    "Dropping command for unknown MiraBox device %s/%s",
+                    ref.manager_id,
+                    ref.device_id,
+                )
+                continue
+            await command_stream.send(envelope)
