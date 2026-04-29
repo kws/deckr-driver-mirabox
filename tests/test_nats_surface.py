@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import anyio
 import pytest
+from deckr.contracts.lanes import CORE_LANE_CONTRACTS, LaneContractRegistry
 from deckr.contracts.messages import (
     DeckrMessage,
     controller_address,
@@ -13,13 +14,27 @@ from deckr.contracts.messages import (
 )
 from deckr.hardware import messages as hw_messages
 from deckr.runtime import Deckr
-from deckr.state import DeviceClaim, HardwareInventory, hardware_inventory_key
+from deckr.state import (
+    DeviceClaim,
+    HardwareInventory,
+    StateUnavailable,
+    hardware_inventory_key,
+)
+from memory_lane_substrate import MemoryLaneSubstrate
 
 from deckr.drivers.mirabox._discovery import (
     _apply_device_commands,
     _manager_command_subscription,
 )
 from deckr.drivers.mirabox._factory import MiraboxDeviceFactory
+
+
+def _deckr() -> Deckr:
+    lane_contracts = LaneContractRegistry(CORE_LANE_CONTRACTS.values())
+    return Deckr(
+        lane_contracts=lane_contracts,
+        substrate=MemoryLaneSubstrate(lane_contracts=lane_contracts),
+    )
 
 
 def _device() -> hw_messages.HardwareDevice:
@@ -62,7 +77,7 @@ def _claim(controller_id: str = "main", session_id: str = "controller-session"):
 
 @pytest.mark.asyncio
 async def test_connect_and_disconnect_rewrite_aggregate_inventory() -> None:
-    async with Deckr() as deckr:
+    async with _deckr() as deckr:
         manager = _factory(deckr)
         await manager._handle_device_message(
             hw_messages.hardware_input_message(
@@ -91,8 +106,36 @@ async def test_connect_and_disconnect_rewrite_aggregate_inventory() -> None:
 
 
 @pytest.mark.asyncio
+async def test_inventory_state_unavailable_keeps_local_device_state() -> None:
+    class UnavailableState:
+        async def put(self, *args, **kwargs):
+            raise StateUnavailable("temporary substrate outage")
+
+    async with _deckr() as deckr:
+        manager = MiraboxDeviceFactory(
+            deckr.lane("hardware_messages"),
+            UnavailableState(),
+            manager_id="mirabox-main",
+        )
+        manager._endpoint = deckr.lane("hardware_messages").endpoint(
+            hardware_manager_address("mirabox-main")
+        )
+
+        await manager._handle_device_message(
+            hw_messages.hardware_input_message(
+                manager_id="mirabox-main",
+                device_id="deck",
+                body=hw_messages.DeviceConnectedMessage(device=_device()),
+            )
+        )
+
+    assert "deck" in manager._devices
+    assert manager._inventory_revision is None
+
+
+@pytest.mark.asyncio
 async def test_presence_heartbeat_refreshes_aggregate_inventory() -> None:
-    async with Deckr() as deckr:
+    async with _deckr() as deckr:
         manager = _factory(deckr)
         manager._devices["deck"] = _device()
 
@@ -114,7 +157,7 @@ async def test_presence_heartbeat_refreshes_aggregate_inventory() -> None:
 
 @pytest.mark.asyncio
 async def test_claimed_input_is_sent_only_to_claiming_controller() -> None:
-    async with Deckr() as deckr:
+    async with _deckr() as deckr:
         manager = _factory(deckr)
         manager._claims["deck"] = _claim()
         manager._controller_presence_sessions[controller_address("main")] = (
@@ -148,7 +191,7 @@ async def test_claim_delete_resets_device_and_drops_input() -> None:
             self.clear_key = AsyncMock()
             self.refresh = AsyncMock()
 
-    async with Deckr() as deckr:
+    async with _deckr() as deckr:
         manager = _factory(deckr)
         device = FakeDevice()
         command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
@@ -207,7 +250,7 @@ async def test_claim_without_matching_controller_presence_resets_and_is_unroutab
             self.clear_key = AsyncMock()
             self.refresh = AsyncMock()
 
-    async with Deckr() as deckr:
+    async with _deckr() as deckr:
         manager = _factory(deckr)
         device = FakeDevice()
         command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
@@ -262,7 +305,7 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
             self.sleep_screen = AsyncMock()
             self.wake_screen = AsyncMock()
 
-    async with Deckr() as deckr:
+    async with _deckr() as deckr:
         device = FakeDevice()
         manager = deckr.lane("hardware_messages").endpoint(
             hardware_manager_address("mirabox-main")

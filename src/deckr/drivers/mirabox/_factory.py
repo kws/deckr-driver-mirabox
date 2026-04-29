@@ -26,6 +26,7 @@ from deckr.state import (
     HardwareInventoryDevice,
     StateConflict,
     StateStore,
+    StateUnavailable,
     encode_key_token,
     hardware_inventory_key,
     parse_device_claim_key,
@@ -89,8 +90,8 @@ class MiraboxDeviceFactory(BaseComponent):
             lane=self._endpoint.lane.name,
             endpoint=self._endpoint.endpoint,
         )
-        try:
-            while True:
+        while True:
+            try:
                 entry = await self._state.put(
                     key,
                     EndpointPresence(
@@ -104,10 +105,13 @@ class MiraboxDeviceFactory(BaseComponent):
                     ttl=PRESENCE_TTL_SECONDS,
                 )
                 self._presence_revision = entry.revision
-                await self._publish_inventory()
-                await anyio.sleep(PRESENCE_HEARTBEAT_SECONDS)
-        finally:
-            await self._withdraw_presence()
+                await self._publish_inventory_safely()
+            except StateUnavailable:
+                logger.warning(
+                    "MiraBox manager current state is unavailable; heartbeat will retry",
+                    exc_info=True,
+                )
+            await anyio.sleep(PRESENCE_HEARTBEAT_SECONDS)
 
     async def _withdraw_presence(self) -> None:
         if self._endpoint is None:
@@ -125,8 +129,11 @@ class MiraboxDeviceFactory(BaseComponent):
                 self._presence_revision = None
             except StateConflict:
                 logger.debug("MiraBox manager presence changed before withdrawal")
-            except Exception:
-                logger.debug("Failed to withdraw MiraBox manager presence", exc_info=True)
+            except StateUnavailable:
+                logger.warning(
+                    "Failed to withdraw MiraBox manager presence",
+                    exc_info=True,
+                )
 
     async def _discovery_loop(self) -> None:
         if self._endpoint is None:
@@ -148,13 +155,13 @@ class MiraboxDeviceFactory(BaseComponent):
             return
         if isinstance(event, hw_messages.DeviceConnectedMessage):
             self._devices[ref.device_id] = event.device
-            await self._publish_inventory()
+            await self._publish_inventory_safely()
             return
         if isinstance(event, hw_messages.DeviceDisconnectedMessage):
             self._devices.pop(ref.device_id, None)
             self._claims.pop(ref.device_id, None)
             self._unroutable_devices.discard(ref.device_id)
-            await self._publish_inventory()
+            await self._publish_inventory_safely()
             return
         if not isinstance(event, hw_messages.HARDWARE_INPUT_MESSAGE_TYPES):
             return
@@ -206,6 +213,15 @@ class MiraboxDeviceFactory(BaseComponent):
         )
         self._inventory_revision = entry.revision
 
+    async def _publish_inventory_safely(self) -> None:
+        try:
+            await self._publish_inventory()
+        except StateUnavailable:
+            logger.warning(
+                "MiraBox inventory current state is unavailable; heartbeat will retry",
+                exc_info=True,
+            )
+
     async def _withdraw_inventory(self) -> None:
         revision = self._inventory_revision
         if revision is None:
@@ -219,32 +235,40 @@ class MiraboxDeviceFactory(BaseComponent):
                 self._inventory_revision = None
             except StateConflict:
                 logger.debug("MiraBox inventory changed before withdrawal")
-            except Exception:
-                logger.debug("Failed to withdraw MiraBox inventory", exc_info=True)
+            except StateUnavailable:
+                logger.warning("Failed to withdraw MiraBox inventory", exc_info=True)
 
     async def _claim_watch_loop(self) -> None:
         prefix = f"claim.device.{encode_key_token(self.manager_id)}."
-        async with self._state.watch(prefix) as stream:
-            async for change in stream:
-                parsed = parse_device_claim_key(change.key)
-                if parsed is None:
-                    continue
-                manager_id, device_id = parsed
-                if manager_id != self.manager_id:
-                    continue
-                if change.entry is None:
-                    await self._remove_claim(device_id, reset=True)
-                    continue
-                try:
-                    claim = DeviceClaim.model_validate(change.entry.value)
-                except ValueError:
-                    await self._remove_claim(device_id, reset=True)
-                    continue
-                self._claims[device_id] = claim
-                if self._claim_recipient(device_id) is None:
-                    await self._mark_unroutable(device_id)
-                else:
-                    self._unroutable_devices.discard(device_id)
+        while True:
+            try:
+                async with self._state.watch(prefix) as stream:
+                    async for change in stream:
+                        parsed = parse_device_claim_key(change.key)
+                        if parsed is None:
+                            continue
+                        manager_id, device_id = parsed
+                        if manager_id != self.manager_id:
+                            continue
+                        if change.entry is None:
+                            await self._remove_claim(device_id, reset=True)
+                            continue
+                        try:
+                            claim = DeviceClaim.model_validate(change.entry.value)
+                        except ValueError:
+                            await self._remove_claim(device_id, reset=True)
+                            continue
+                        self._claims[device_id] = claim
+                        if self._claim_recipient(device_id) is None:
+                            await self._mark_unroutable(device_id)
+                        else:
+                            self._unroutable_devices.discard(device_id)
+            except StateUnavailable:
+                logger.warning(
+                    "MiraBox device claim state is unavailable; watch will retry",
+                    exc_info=True,
+                )
+                await anyio.sleep(1)
 
     async def _controller_presence_loop(self) -> None:
         prefix = ".".join(
@@ -256,26 +280,40 @@ class MiraboxDeviceFactory(BaseComponent):
                 "",
             )
         )
-        async with self._state.watch(prefix) as stream:
-            async for change in stream:
-                parsed = parse_presence_endpoint_key(change.key)
-                if parsed is None:
-                    continue
-                lane, endpoint = parsed
-                if lane != "hardware_messages" or endpoint.family != "controller":
-                    continue
-                if change.entry is None:
-                    self._controller_presence_sessions.pop(endpoint, None)
-                    await self._reset_claims_for_controller(endpoint)
-                    continue
-                try:
-                    presence = EndpointPresence.model_validate(change.entry.value)
-                except ValueError:
-                    self._controller_presence_sessions.pop(endpoint, None)
-                    await self._reset_claims_for_controller(endpoint)
-                    continue
-                self._controller_presence_sessions[endpoint] = presence.session_id
-                await self._reset_unroutable_claims_for_controller(endpoint)
+        while True:
+            try:
+                async with self._state.watch(prefix) as stream:
+                    async for change in stream:
+                        parsed = parse_presence_endpoint_key(change.key)
+                        if parsed is None:
+                            continue
+                        lane, endpoint = parsed
+                        if lane != "hardware_messages" or endpoint.family != "controller":
+                            continue
+                        if change.entry is None:
+                            self._controller_presence_sessions.pop(endpoint, None)
+                            await self._reset_claims_for_controller(endpoint)
+                            continue
+                        try:
+                            presence = EndpointPresence.model_validate(change.entry.value)
+                        except ValueError:
+                            self._controller_presence_sessions.pop(endpoint, None)
+                            await self._reset_claims_for_controller(endpoint)
+                            continue
+                        if presence.endpoint != endpoint or presence.lane != lane:
+                            self._controller_presence_sessions.pop(endpoint, None)
+                            await self._reset_claims_for_controller(endpoint)
+                            continue
+                        self._controller_presence_sessions[endpoint] = (
+                            presence.session_id
+                        )
+                        await self._reset_unroutable_claims_for_controller(endpoint)
+            except StateUnavailable:
+                logger.warning(
+                    "Controller endpoint presence state is unavailable; watch will retry",
+                    exc_info=True,
+                )
+                await anyio.sleep(1)
 
     def _claim_recipient(self, device_id: str) -> EndpointAddress | None:
         claim = self._claims.get(device_id)
