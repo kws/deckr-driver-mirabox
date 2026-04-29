@@ -16,9 +16,11 @@ from deckr.hardware import messages as hw_messages
 from deckr.runtime import Deckr
 from deckr.state import (
     DeviceClaim,
+    EndpointPresence,
     HardwareInventory,
     StateUnavailable,
     hardware_inventory_key,
+    presence_endpoint_key,
 )
 from memory_lane_substrate import MemoryLaneSubstrate
 
@@ -72,6 +74,26 @@ def _claim(controller_id: str = "main", session_id: str = "controller-session"):
         claimedBySessionId=session_id,
         timestamp=datetime.now(UTC),
         ttlSeconds=15,
+    )
+
+
+async def _put_controller_presence(
+    deckr: Deckr,
+    *,
+    controller_id: str = "main",
+    session_id: str = "controller-session",
+) -> None:
+    endpoint = controller_address(controller_id)
+    await deckr.state().put(
+        presence_endpoint_key(lane="hardware_messages", endpoint=endpoint),
+        EndpointPresence(
+            endpoint=endpoint,
+            lane="hardware_messages",
+            sessionId=session_id,
+            timestamp=datetime.now(UTC),
+            ttlSeconds=15,
+            metadata={},
+        ),
     )
 
 
@@ -196,9 +218,7 @@ async def test_claim_delete_resets_device_and_drops_input() -> None:
         device = FakeDevice()
         command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
         manager._command_streams["deck"] = command_send
-        manager._controller_presence_sessions[controller_address("main")] = (
-            "controller-session"
-        )
+        await _put_controller_presence(deckr)
         claim_key = "claim.device.mirabox-main.deck"
         main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
 
@@ -221,6 +241,60 @@ async def test_claim_delete_resets_device_and_drops_input() -> None:
                     await anyio.sleep(0.01)
 
             await deckr.state().delete(claim_key)
+            with anyio.fail_after(1):
+                while device.clear_key.await_count < 1:
+                    await anyio.sleep(0.01)
+
+            await manager._handle_device_message(
+                hw_messages.hardware_input_message(
+                    manager_id="mirabox-main",
+                    device_id="deck",
+                    body=hw_messages.KeyDownMessage(key_id="0,0"),
+                )
+            )
+            with anyio.move_on_after(0.05) as scope:
+                await main_stream.receive()
+            tg.cancel_scope.cancel()
+
+    device.clear_key.assert_awaited_once()
+    device.refresh.assert_awaited_once()
+    assert scope.cancel_called
+
+
+@pytest.mark.asyncio
+async def test_broker_snapshot_claim_delete_resets_device_and_drops_input() -> None:
+    class FakeDevice:
+        id = "deck"
+
+        def __init__(self) -> None:
+            self.clear_key = AsyncMock()
+            self.refresh = AsyncMock()
+
+    async with _deckr() as deckr:
+        manager = _factory(deckr)
+        device = FakeDevice()
+        command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
+        manager._command_streams["deck"] = command_send
+        await _put_controller_presence(deckr)
+        claim_key = "claim.device.mirabox-main.deck"
+        await deckr.state().create(claim_key, _claim())
+        await manager._reconcile_routing_current_state(reason="test snapshot")
+        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+
+        async with (
+            command_send,
+            command_receive,
+            main.subscribe() as main_stream,
+            anyio.create_task_group() as tg,
+        ):
+            tg.start_soon(
+                _apply_device_commands,
+                device,
+                command_receive,
+                "mirabox-main",
+            )
+            await deckr.state().delete(claim_key)
+            await manager._reconcile_routing_current_state(reason="test snapshot")
             with anyio.fail_after(1):
                 while device.clear_key.await_count < 1:
                     await anyio.sleep(0.01)
@@ -289,6 +363,92 @@ async def test_claim_without_matching_controller_presence_resets_and_is_unroutab
                 await main_stream.receive()
             tg.cancel_scope.cancel()
 
+    device.clear_key.assert_awaited_once()
+    device.refresh.assert_awaited_once()
+    assert scope.cancel_called
+
+
+@pytest.mark.asyncio
+async def test_controller_presence_restore_makes_current_claim_routable() -> None:
+    async with _deckr() as deckr:
+        manager = _factory(deckr)
+        claim_key = "claim.device.mirabox-main.deck"
+        await deckr.state().create(claim_key, _claim())
+        await manager._reconcile_routing_current_state(reason="test snapshot")
+        assert manager._claim_recipient("deck") is None
+
+        await _put_controller_presence(deckr)
+        await manager._reconcile_routing_current_state(reason="test snapshot")
+        assert manager._claim_recipient("deck") == controller_address("main")
+
+        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+        async with main.subscribe() as main_stream:
+            await manager._handle_device_message(
+                hw_messages.hardware_input_message(
+                    manager_id="mirabox-main",
+                    device_id="deck",
+                    body=hw_messages.KeyDownMessage(key_id="0,0"),
+                )
+            )
+            received = await main_stream.receive()
+
+    assert received.recipient.endpoint == controller_address("main")
+
+
+@pytest.mark.asyncio
+async def test_invalid_claim_payload_is_not_routable() -> None:
+    class FakeDevice:
+        id = "deck"
+
+        def __init__(self) -> None:
+            self.clear_key = AsyncMock()
+            self.refresh = AsyncMock()
+
+    async with _deckr() as deckr:
+        manager = _factory(deckr)
+        device = FakeDevice()
+        command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
+        manager._command_streams["deck"] = command_send
+        await deckr.state().put(
+            "claim.device.mirabox-main.deck",
+            {
+                "claimedByEndpoint": "controller:main",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "ttlSeconds": 15,
+            },
+        )
+        await _put_controller_presence(deckr)
+        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+
+        async with (
+            command_send,
+            command_receive,
+            main.subscribe() as main_stream,
+            anyio.create_task_group() as tg,
+        ):
+            tg.start_soon(
+                _apply_device_commands,
+                device,
+                command_receive,
+                "mirabox-main",
+            )
+            await manager._reconcile_routing_current_state(reason="test snapshot")
+            with anyio.fail_after(1):
+                while device.clear_key.await_count < 1:
+                    await anyio.sleep(0.01)
+
+            await manager._handle_device_message(
+                hw_messages.hardware_input_message(
+                    manager_id="mirabox-main",
+                    device_id="deck",
+                    body=hw_messages.KeyDownMessage(key_id="0,0"),
+                )
+            )
+            with anyio.move_on_after(0.05) as scope:
+                await main_stream.receive()
+            tg.cancel_scope.cancel()
+
+    assert "deck" not in manager._claims
     device.clear_key.assert_awaited_once()
     device.refresh.assert_awaited_once()
     assert scope.cancel_called

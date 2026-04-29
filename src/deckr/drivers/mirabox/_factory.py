@@ -44,6 +44,17 @@ logger = logging.getLogger(__name__)
 
 PRESENCE_HEARTBEAT_SECONDS = 5.0
 PRESENCE_TTL_SECONDS = 15
+_STATE_RECONCILE_SECONDS = 1.0
+_WATCH_RETRY_SECONDS = 1.0
+_CONTROLLER_PRESENCE_PREFIX = ".".join(
+    (
+        "presence",
+        "endpoint",
+        encode_key_token("hardware_messages"),
+        encode_key_token("controller"),
+        "",
+    )
+)
 
 
 class MiraboxDeviceFactory(BaseComponent):
@@ -62,6 +73,7 @@ class MiraboxDeviceFactory(BaseComponent):
         self._command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]] = {}
         self._presence_revision: int | None = None
         self._inventory_revision: int | None = None
+        self._routing_reconcile_lock = anyio.Lock()
 
     async def start(self, ctx: RunContext) -> None:
         self._endpoint = self._hardware_lane.endpoint(
@@ -71,6 +83,7 @@ class MiraboxDeviceFactory(BaseComponent):
         ctx.tg.start_soon(self._presence_loop)
         ctx.tg.start_soon(self._claim_watch_loop)
         ctx.tg.start_soon(self._controller_presence_loop)
+        ctx.tg.start_soon(self._routing_reconciliation_loop)
         ctx.tg.start_soon(self._discovery_loop)
 
     async def stop(self) -> None:
@@ -250,39 +263,20 @@ class MiraboxDeviceFactory(BaseComponent):
                         manager_id, device_id = parsed
                         if manager_id != self.manager_id:
                             continue
-                        if change.entry is None:
-                            await self._remove_claim(device_id, reset=True)
-                            continue
-                        try:
-                            claim = DeviceClaim.model_validate(change.entry.value)
-                        except ValueError:
-                            await self._remove_claim(device_id, reset=True)
-                            continue
-                        self._claims[device_id] = claim
-                        if self._claim_recipient(device_id) is None:
-                            await self._mark_unroutable(device_id)
-                        else:
-                            self._unroutable_devices.discard(device_id)
+                        await self._reconcile_routing_current_state(
+                            reason="device claim watch"
+                        )
             except StateUnavailable:
                 logger.warning(
                     "MiraBox device claim state is unavailable; watch will retry",
                     exc_info=True,
                 )
-                await anyio.sleep(1)
+                await anyio.sleep(_WATCH_RETRY_SECONDS)
 
     async def _controller_presence_loop(self) -> None:
-        prefix = ".".join(
-            (
-                "presence",
-                "endpoint",
-                encode_key_token("hardware_messages"),
-                encode_key_token("controller"),
-                "",
-            )
-        )
         while True:
             try:
-                async with self._state.watch(prefix) as stream:
+                async with self._state.watch(_CONTROLLER_PRESENCE_PREFIX) as stream:
                     async for change in stream:
                         parsed = parse_presence_endpoint_key(change.key)
                         if parsed is None:
@@ -290,68 +284,124 @@ class MiraboxDeviceFactory(BaseComponent):
                         lane, endpoint = parsed
                         if lane != "hardware_messages" or endpoint.family != "controller":
                             continue
-                        if change.entry is None:
-                            self._controller_presence_sessions.pop(endpoint, None)
-                            await self._reset_claims_for_controller(endpoint)
-                            continue
-                        try:
-                            presence = EndpointPresence.model_validate(change.entry.value)
-                        except ValueError:
-                            self._controller_presence_sessions.pop(endpoint, None)
-                            await self._reset_claims_for_controller(endpoint)
-                            continue
-                        if presence.endpoint != endpoint or presence.lane != lane:
-                            self._controller_presence_sessions.pop(endpoint, None)
-                            await self._reset_claims_for_controller(endpoint)
-                            continue
-                        self._controller_presence_sessions[endpoint] = (
-                            presence.session_id
+                        await self._reconcile_routing_current_state(
+                            reason="controller presence watch"
                         )
-                        await self._reset_unroutable_claims_for_controller(endpoint)
             except StateUnavailable:
                 logger.warning(
                     "Controller endpoint presence state is unavailable; watch will retry",
                     exc_info=True,
                 )
-                await anyio.sleep(1)
+                await anyio.sleep(_WATCH_RETRY_SECONDS)
+
+    async def _routing_reconciliation_loop(self) -> None:
+        while True:
+            try:
+                await self._reconcile_routing_current_state(reason="broker snapshot")
+            except StateUnavailable:
+                logger.warning(
+                    "MiraBox routing current state unavailable; reconciliation will retry",
+                    exc_info=True,
+                )
+            await anyio.sleep(_STATE_RECONCILE_SECONDS)
+
+    async def _reconcile_routing_current_state(self, *, reason: str) -> None:
+        async with self._routing_reconcile_lock:
+            await self._reconcile_routing_current_state_locked(reason=reason)
+
+    async def _reconcile_routing_current_state_locked(self, *, reason: str) -> None:
+        claim_prefix = f"claim.device.{encode_key_token(self.manager_id)}."
+        claim_entries = await self._state.items(claim_prefix)
+        presence_entries = await self._state.items(_CONTROLLER_PRESENCE_PREFIX)
+
+        next_claims: dict[str, DeviceClaim] = {}
+        invalid_claim_devices: set[str] = set()
+        next_controller_sessions: dict[EndpointAddress, str] = {}
+
+        for entry in claim_entries:
+            parsed = parse_device_claim_key(entry.key)
+            if parsed is None:
+                continue
+            manager_id, device_id = parsed
+            if manager_id != self.manager_id:
+                continue
+            try:
+                next_claims[device_id] = DeviceClaim.model_validate(entry.value)
+            except ValueError:
+                logger.warning("Ignoring invalid MiraBox device claim %s", entry.key)
+                invalid_claim_devices.add(device_id)
+
+        for entry in presence_entries:
+            parsed = parse_presence_endpoint_key(entry.key)
+            if parsed is None:
+                continue
+            lane, endpoint = parsed
+            if lane != "hardware_messages" or endpoint.family != "controller":
+                continue
+            try:
+                presence = EndpointPresence.model_validate(entry.value)
+            except ValueError:
+                logger.warning("Ignoring invalid controller presence %s", entry.key)
+                continue
+            if presence.endpoint != endpoint or presence.lane != lane:
+                logger.warning(
+                    "Ignoring controller presence %s with mismatched payload",
+                    entry.key,
+                )
+                continue
+            next_controller_sessions[endpoint] = presence.session_id
+
+        logger.debug("Reconciling MiraBox routing current state via %s", reason)
+        devices_to_reset = self._devices_to_reset_for_routing_snapshot(
+            next_claims,
+            next_controller_sessions,
+            invalid_claim_devices,
+        )
+        self._claims = next_claims
+        self._controller_presence_sessions = next_controller_sessions
+        self._unroutable_devices = {
+            device_id
+            for device_id, claim in next_claims.items()
+            if _claim_recipient(claim, next_controller_sessions) is None
+        }
+        for device_id in sorted(devices_to_reset):
+            await self._reset_device(device_id)
+
+    def _devices_to_reset_for_routing_snapshot(
+        self,
+        next_claims: dict[str, DeviceClaim],
+        next_controller_sessions: dict[EndpointAddress, str],
+        invalid_claim_devices: set[str],
+    ) -> set[str]:
+        devices_to_reset = set(invalid_claim_devices)
+        for device_id, old_claim in self._claims.items():
+            next_claim = next_claims.get(device_id)
+            if next_claim is None:
+                devices_to_reset.add(device_id)
+                continue
+            if _claim_route_identity(old_claim) != _claim_route_identity(next_claim):
+                devices_to_reset.add(device_id)
+                continue
+            if (
+                _claim_recipient(old_claim, self._controller_presence_sessions)
+                is not None
+                and _claim_recipient(next_claim, next_controller_sessions) is None
+            ):
+                devices_to_reset.add(device_id)
+
+        for device_id, next_claim in next_claims.items():
+            if (
+                device_id not in self._claims
+                and _claim_recipient(next_claim, next_controller_sessions) is None
+            ):
+                devices_to_reset.add(device_id)
+        return devices_to_reset
 
     def _claim_recipient(self, device_id: str) -> EndpointAddress | None:
         claim = self._claims.get(device_id)
         if claim is None:
             return None
-        session_id = self._controller_presence_sessions.get(claim.claimed_by_endpoint)
-        if session_id != claim.claimed_by_session_id:
-            return None
-        return claim.claimed_by_endpoint
-
-    async def _remove_claim(self, device_id: str, *, reset: bool) -> None:
-        self._claims.pop(device_id, None)
-        self._unroutable_devices.discard(device_id)
-        if reset:
-            await self._reset_device(device_id)
-
-    async def _mark_unroutable(self, device_id: str) -> None:
-        if device_id in self._unroutable_devices:
-            return
-        self._unroutable_devices.add(device_id)
-        await self._reset_device(device_id)
-
-    async def _reset_claims_for_controller(self, endpoint: EndpointAddress) -> None:
-        for device_id, claim in tuple(self._claims.items()):
-            if claim.claimed_by_endpoint == endpoint:
-                await self._mark_unroutable(device_id)
-
-    async def _reset_unroutable_claims_for_controller(
-        self,
-        endpoint: EndpointAddress,
-    ) -> None:
-        for device_id, claim in tuple(self._claims.items()):
-            if claim.claimed_by_endpoint != endpoint:
-                continue
-            if self._claim_recipient(device_id) is None:
-                await self._mark_unroutable(device_id)
-            else:
-                self._unroutable_devices.discard(device_id)
+        return _claim_recipient(claim, self._controller_presence_sessions)
 
     async def _reset_device(self, device_id: str) -> None:
         stream = self._command_streams.get(device_id)
@@ -361,6 +411,20 @@ class MiraboxDeviceFactory(BaseComponent):
             await stream.send(ResetDeviceCommand())
         except (anyio.BrokenResourceError, anyio.ClosedResourceError):
             logger.debug("Could not reset closed MiraBox device session %s", device_id)
+
+
+def _claim_route_identity(claim: DeviceClaim) -> tuple[EndpointAddress, str]:
+    return claim.claimed_by_endpoint, claim.claimed_by_session_id
+
+
+def _claim_recipient(
+    claim: DeviceClaim,
+    controller_presence_sessions: dict[EndpointAddress, str],
+) -> EndpointAddress | None:
+    session_id = controller_presence_sessions.get(claim.claimed_by_endpoint)
+    if session_id != claim.claimed_by_session_id:
+        return None
+    return claim.claimed_by_endpoint
 
 
 def driver_factory(
