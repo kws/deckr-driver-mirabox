@@ -1,9 +1,21 @@
 import logging
 from collections import namedtuple
 from collections.abc import Generator
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
-import deckr.hardware.messages as hw_messages
+from deckr.hardware.descriptors import (
+    DECKR_INPUT_BUTTON,
+    DECKR_INPUT_ENCODER,
+    DECKR_INPUT_TOUCH,
+    DECKR_OUTPUT_RASTER,
+    CapabilityDescriptor,
+    CapabilitySchema,
+    ControlGeometry,
+)
+from deckr.hardware.descriptors import (
+    ControlDescriptor as DeckrControlDescriptor,
+)
 from pydantic import BaseModel, Field, model_validator
 
 from deckr.drivers.mirabox._protocol import InteractionEvent
@@ -11,19 +23,19 @@ from deckr.drivers.mirabox._protocol import InteractionEvent
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class ControlInputEvent:
+    control_id: str
+    capability_id: str
+    event_type: str
+    value: dict[str, Any]
+
+
 class ImageFormat(BaseModel):
     width: int
     height: int
     format: str
     rotation: int = 0
-
-    def to_hw_image_format(self) -> hw_messages.HardwareImageFormat:
-        return hw_messages.HardwareImageFormat(
-            width=self.width,
-            height=self.height,
-            format=self.format,
-            rotation=self.rotation,
-        )
 
 
 class Display(BaseModel):
@@ -137,6 +149,201 @@ class Heartbeat(BaseModel):
 ControlDescriptor = namedtuple("ControlDescriptor", ["event_type", "control"])
 
 
+def _button_value_schema(events: tuple[str, ...], schema_id: str) -> CapabilitySchema:
+    return CapabilitySchema.model_validate(
+        {
+            "schemaId": schema_id,
+            "schema": {
+                "type": "object",
+                "required": ["eventType"],
+                "properties": {"eventType": {"enum": list(events)}},
+                "additionalProperties": False,
+            },
+        }
+    )
+
+
+def _encoder_value_schema() -> CapabilitySchema:
+    return CapabilitySchema.model_validate(
+        {
+            "schemaId": "deckr.value.input.encoder.relative.v1",
+            "schema": {
+                "type": "object",
+                "required": ["delta"],
+                "properties": {
+                    "delta": {"type": "integer"},
+                    "direction": {"enum": ["clockwise", "counterclockwise"]},
+                },
+                "additionalProperties": False,
+            },
+        }
+    )
+
+
+def _touch_value_schema() -> CapabilitySchema:
+    return CapabilitySchema.model_validate(
+        {
+            "schemaId": "deckr.value.input.touch.gesture.v1",
+            "schema": {
+                "type": "object",
+                "required": ["eventType"],
+                "properties": {
+                    "eventType": {"enum": ["tap", "swipe"]},
+                    "direction": {"enum": ["left", "right"]},
+                },
+                "additionalProperties": False,
+            },
+        }
+    )
+
+
+def _raster_command_schema(width: int, height: int) -> CapabilitySchema:
+    return CapabilitySchema.model_validate(
+        {
+            "schemaId": "deckr.command.output.raster.bitmap.v1",
+            "schema": {
+                "type": "object",
+                "required": ["commandType"],
+                "properties": {
+                    "commandType": {"enum": ["set_frame", "clear"]},
+                    "image": {"type": "string", "contentEncoding": "base64"},
+                    "encoding": {"enum": ["jpeg", "png"]},
+                    "width": {"const": width},
+                    "height": {"const": height},
+                },
+                "additionalProperties": False,
+            },
+        }
+    )
+
+
+def _momentary_button_capability() -> CapabilityDescriptor:
+    return CapabilityDescriptor(
+        capabilityId="button.momentary",
+        family=DECKR_INPUT_BUTTON,
+        type="momentary",
+        direction="input",
+        access=("emits",),
+        valueSchema=_button_value_schema(
+            ("down", "up"),
+            "deckr.value.input.button.momentary.v1",
+        ),
+        eventTypes=("down", "up"),
+    )
+
+
+def _activation_button_capability(
+    control_id: str,
+    *,
+    projected: bool,
+) -> CapabilityDescriptor:
+    payload: dict[str, Any] = {
+        "capabilityId": "button.press",
+        "family": DECKR_INPUT_BUTTON,
+        "type": "activation",
+        "direction": "input",
+        "access": ["emits"],
+        "valueSchema": _button_value_schema(
+            ("press",),
+            "deckr.value.input.button.activation.v1",
+        ).model_dump(by_alias=True, exclude_none=True, mode="json"),
+        "eventTypes": ["press"],
+    }
+    if projected:
+        payload["projection"] = {
+            "owner": "hardware_manager",
+            "source": {
+                "controlId": control_id,
+                "capabilityId": "button.momentary",
+            },
+        }
+    return CapabilityDescriptor.model_validate(payload)
+
+
+def _encoder_capability() -> CapabilityDescriptor:
+    return CapabilityDescriptor.model_validate(
+        {
+            "capabilityId": "encoder.relative",
+            "family": DECKR_INPUT_ENCODER,
+            "type": "relative",
+            "direction": "input",
+            "access": ["emits"],
+            "valueSchema": _encoder_value_schema().model_dump(
+                by_alias=True,
+                exclude_none=True,
+                mode="json",
+            ),
+            "eventTypes": ["rotate"],
+            "constraints": [
+                {
+                    "type": "range",
+                    "subject": "delta",
+                    "minimum": -24,
+                    "maximum": 24,
+                    "step": 1,
+                    "unit": "detent",
+                }
+            ],
+            "units": [{"subject": "delta", "unit": "detent"}],
+        }
+    )
+
+
+def _touch_capability() -> CapabilityDescriptor:
+    return CapabilityDescriptor(
+        capabilityId="touch.gesture",
+        family=DECKR_INPUT_TOUCH,
+        type="gesture",
+        direction="input",
+        access=("emits",),
+        valueSchema=_touch_value_schema(),
+        eventTypes=("tap", "swipe"),
+    )
+
+
+def _raster_capability(format: ImageFormat) -> CapabilityDescriptor:
+    return CapabilityDescriptor.model_validate(
+        {
+            "capabilityId": "raster.bitmap",
+            "family": DECKR_OUTPUT_RASTER,
+            "type": "bitmap",
+            "direction": "output",
+            "access": ["settable"],
+            "commandSchema": _raster_command_schema(
+                format.width,
+                format.height,
+            ).model_dump(by_alias=True, exclude_none=True, mode="json"),
+            "commandTypes": ["set_frame", "clear"],
+            "constraints": [
+                {
+                    "type": "fixed",
+                    "subject": "width",
+                    "value": format.width,
+                    "unit": "pixel",
+                },
+                {
+                    "type": "fixed",
+                    "subject": "height",
+                    "value": format.height,
+                    "unit": "pixel",
+                },
+                {
+                    "type": "fixed",
+                    "subject": "rotation",
+                    "value": format.rotation,
+                    "unit": "degree",
+                },
+                {"type": "enum", "subject": "encoding", "values": ["jpeg", "png"]},
+            ],
+            "units": [
+                {"subject": "width", "unit": "pixel"},
+                {"subject": "height", "unit": "pixel"},
+                {"subject": "rotation", "unit": "degree"},
+            ],
+        }
+    )
+
+
 class Layout(BaseModel):
     name: str
     candidate: str
@@ -190,29 +397,58 @@ class Layout(BaseModel):
             return ("screen", [])
         return ("key", ["key_down", "key_up"])
 
-    def get_slots(self) -> list[hw_messages.HardwareSlot]:
+    def get_controls(self) -> list[DeckrControlDescriptor]:
         result = []
         for control in self.controls:
-            slot_type, gestures = self._slot_type_and_gestures(control)
-            image_format = None
+            input_capabilities: list[CapabilityDescriptor] = []
+            if isinstance(control, KeyControl | ButtonControl):
+                if control.events.key is not None:
+                    input_capabilities.append(_momentary_button_capability())
+                    input_capabilities.append(
+                        _activation_button_capability(control.name, projected=True)
+                    )
+                else:
+                    input_capabilities.append(
+                        _activation_button_capability(control.name, projected=False)
+                    )
+            if isinstance(control, DialControl | TouchDialControl):
+                input_capabilities.append(_encoder_capability())
+                if control.events.key is not None:
+                    input_capabilities.append(_momentary_button_capability())
+                    input_capabilities.append(
+                        _activation_button_capability(control.name, projected=True)
+                    )
+                else:
+                    input_capabilities.append(
+                        _activation_button_capability(control.name, projected=False)
+                    )
+            if isinstance(control, TouchDialControl | TouchStripControl):
+                input_capabilities.append(_touch_capability())
+            output_capabilities: list[CapabilityDescriptor] = []
             if hasattr(control, "display"):
-                image_format = control.display.format.to_hw_image_format()
+                output_capabilities.append(_raster_capability(control.display.format))
             result.append(
-                hw_messages.HardwareSlot(
-                    id=control.name,
-                    coordinates=hw_messages.HardwareCoordinates(
-                        column=control.column, row=control.row
+                DeckrControlDescriptor(
+                    controlId=control.name,
+                    kind=control.type,
+                    label=control.name,
+                    geometry=ControlGeometry(
+                        x=control.column,
+                        y=control.row,
+                        width=1,
+                        height=1,
+                        unit="grid",
                     ),
-                    image_format=image_format,
-                    slot_type=slot_type,
-                    gestures=gestures,
+                    inputCapabilities=tuple(input_capabilities),
+                    outputCapabilities=tuple(output_capabilities),
                 )
             )
         return result
 
-    def to_hardware_input(
+    def to_control_input(
         self, event: InteractionEvent, device
-    ) -> Generator[hw_messages.HardwareInputMessage, None, None]:
+    ) -> Generator[ControlInputEvent, None, None]:
+        del device
         control_descriptor = self.get_control_for_event(event.button_id)
         if control_descriptor is None:
             logger.warning(f"Control not found for event: {event}")
@@ -222,29 +458,66 @@ class Layout(BaseModel):
 
         if control_descriptor.event_type == "key":
             if event.payload == 0:
-                yield hw_messages.KeyUpMessage(key_id=control_name)
+                yield ControlInputEvent(
+                    control_id=control_name,
+                    capability_id="button.momentary",
+                    event_type="up",
+                    value={"eventType": "up"},
+                )
+                yield ControlInputEvent(
+                    control_id=control_name,
+                    capability_id="button.press",
+                    event_type="press",
+                    value={"eventType": "press"},
+                )
             else:
-                yield hw_messages.KeyDownMessage(key_id=control_name)
+                yield ControlInputEvent(
+                    control_id=control_name,
+                    capability_id="button.momentary",
+                    event_type="down",
+                    value={"eventType": "down"},
+                )
         elif control_descriptor.event_type == "press":
-            yield hw_messages.KeyDownMessage(key_id=control_name)
-            yield hw_messages.KeyUpMessage(key_id=control_name)
+            yield ControlInputEvent(
+                control_id=control_name,
+                capability_id="button.press",
+                event_type="press",
+                value={"eventType": "press"},
+            )
         elif control_descriptor.event_type == "clockwise":
-            yield hw_messages.DialRotateMessage(
-                dial_id=control_name, direction="clockwise"
+            yield ControlInputEvent(
+                control_id=control_name,
+                capability_id="encoder.relative",
+                event_type="rotate",
+                value={"delta": 1, "direction": "clockwise"},
             )
         elif control_descriptor.event_type == "counterclockwise":
-            yield hw_messages.DialRotateMessage(
-                dial_id=control_name, direction="counterclockwise"
+            yield ControlInputEvent(
+                control_id=control_name,
+                capability_id="encoder.relative",
+                event_type="rotate",
+                value={"delta": -1, "direction": "counterclockwise"},
             )
         elif control_descriptor.event_type == "tap":
-            yield hw_messages.TouchTapMessage(touch_id=control_name)
+            yield ControlInputEvent(
+                control_id=control_name,
+                capability_id="touch.gesture",
+                event_type="tap",
+                value={"eventType": "tap"},
+            )
         elif control_descriptor.event_type == "left_swipe":
-            yield hw_messages.TouchSwipeMessage(
-                touch_id=control_name, direction="left"
+            yield ControlInputEvent(
+                control_id=control_name,
+                capability_id="touch.gesture",
+                event_type="swipe",
+                value={"eventType": "swipe", "direction": "left"},
             )
         elif control_descriptor.event_type == "right_swipe":
-            yield hw_messages.TouchSwipeMessage(
-                touch_id=control_name, direction="right"
+            yield ControlInputEvent(
+                control_id=control_name,
+                capability_id="touch.gesture",
+                event_type="swipe",
+                value={"eventType": "swipe", "direction": "right"},
             )
         else:
             logger.warning(f"Unknown event type: {control_descriptor.event_type}")

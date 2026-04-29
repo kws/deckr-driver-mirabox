@@ -15,12 +15,16 @@ def test_key_events_require_exactly_one_field() -> None:
         KeyEvents.model_validate({})
 
 
-def test_builtin_layout_validates_and_exposes_slots() -> None:
+def test_builtin_layout_validates_and_exposes_controls() -> None:
     layout_data = yaml.safe_load((BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text())
 
     layout = Layout.model_validate(layout_data)
-    slots = layout.get_slots()
+    controls = layout.get_controls()
 
     assert layout.name == "MSD_TWO"
-    assert any(slot.slot_type == "encoder" for slot in slots)
-    assert any(slot.id == "0,0" for slot in slots)
+    assert any(
+        cap.capability_id == "encoder.relative"
+        for control in controls
+        for cap in control.input_capabilities
+    )
+    assert any(control.control_id == "0,0" for control in controls)

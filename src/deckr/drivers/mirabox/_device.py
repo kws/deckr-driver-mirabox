@@ -6,15 +6,33 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
-import deckr.hardware.messages as hw_messages
+from deckr.hardware.descriptors import (
+    DECKR_DEVICE_POWER,
+    CapabilityDescriptor,
+    CapabilityRef,
+    DeviceConnection,
+    DeviceDescriptor,
+    DeviceIdentifier,
+)
 
 from deckr.drivers.mirabox._protocol import DeviceProtocol, MiraBoxProtocol
 from deckr.drivers.mirabox._transport import AsyncHidTransport, descriptors_for_path
 from deckr.drivers.mirabox.layouts import Layout, search_candidates
-from deckr.drivers.mirabox.layouts._data import Heartbeat
+from deckr.drivers.mirabox.layouts._data import ControlInputEvent, Heartbeat
 from deckr.drivers.mirabox.layouts._evaluator import eval_policy
 
 logger = logging.getLogger(__name__)
+
+
+def _power_capability() -> CapabilityDescriptor:
+    return CapabilityDescriptor(
+        capabilityId="device.power",
+        family=DECKR_DEVICE_POWER,
+        type="screen",
+        direction="command",
+        access=("invokable",),
+        commandTypes=("sleep", "wake"),
+    )
 
 
 class MiraBoxDockDevice:
@@ -44,6 +62,76 @@ class MiraBoxDockDevice:
     @property
     def descriptor(self) -> dict[str, Any]:
         return self.transport.descriptor
+
+    @property
+    def device_descriptor(self) -> DeviceDescriptor:
+        descriptor = self.transport.descriptor
+        vendor_id = descriptor.get("vendor_id")
+        product_id = descriptor.get("product_id")
+        serial_number = descriptor.get("serial_number")
+        interface_number = descriptor.get("interface_number")
+        usage_page = descriptor.get("usage_page")
+        usage = descriptor.get("usage")
+        facts = {
+            key: value
+            for key, value in {
+                "vendorId": vendor_id,
+                "productId": product_id,
+                "serialNumber": serial_number,
+                "interfaceNumber": interface_number,
+                "usagePage": usage_page,
+                "usage": usage,
+            }.items()
+            if value is not None
+        }
+        identifiers = []
+        if vendor_id is not None and product_id is not None:
+            identifiers.append(
+                DeviceIdentifier(
+                    type="usb.vendor_product",
+                    namespace="usb",
+                    value=f"{vendor_id:04x}:{product_id:04x}",
+                )
+            )
+        first_output = next(
+            (
+                control
+                for control in self.layout.get_controls()
+                if control.output_capabilities
+            ),
+            None,
+        )
+        return DeviceDescriptor(
+            deviceId=self.id,
+            fingerprint=self.hid,
+            displayName=self.layout.name,
+            manufacturer="MiraBox",
+            model=self.layout.name,
+            serialNumber=str(serial_number) if serial_number is not None else None,
+            firmwareVersion=str(descriptor.get("firmware"))
+            if descriptor.get("firmware") is not None
+            else None,
+            identifiers=tuple(identifiers),
+            connections=(
+                DeviceConnection(
+                    connectionId="usb-hid-0",
+                    type="hid",
+                    status="connected",
+                    transport="usb",
+                    facts=facts,
+                ),
+            ),
+            defaultStatusIndicator=(
+                CapabilityRef(
+                    controlId=first_output.control_id,
+                    capabilityId=first_output.output_capabilities[0].capability_id,
+                )
+                if first_output is not None
+                else None
+            ),
+            capabilities=(_power_capability(),),
+            controls=tuple(self.layout.get_controls()),
+        )
 
     async def send_payloads(self, payloads: list[bytes]) -> None:
         """Send multiple payloads to the device."""
@@ -162,16 +250,12 @@ class MiraBoxDockDevice:
         )
         await self.send_payloads(payloads)
 
-    async def subscribe(self) -> AsyncIterator[hw_messages.HardwareInputMessage]:
+    async def subscribe(self) -> AsyncIterator[ControlInputEvent]:
         async with self.transport.subscribe() as stream:
             async for report in stream:
                 event = self.protocol.parse_event(report)
-                for hw_input in self.layout.to_hardware_input(event, self):
+                for hw_input in self.layout.to_control_input(event, self):
                     yield hw_input
-
-    @property
-    def slots(self) -> list[hw_messages.HardwareSlot]:
-        return self.layout.get_slots()
 
 
 @asynccontextmanager

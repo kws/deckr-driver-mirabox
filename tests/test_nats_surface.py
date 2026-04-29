@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -13,6 +14,16 @@ from deckr.contracts.messages import (
     hardware_manager_address,
 )
 from deckr.hardware import messages as hw_messages
+from deckr.hardware.descriptors import (
+    DECKR_INPUT_BUTTON,
+    DECKR_OUTPUT_RASTER,
+    CapabilityDescriptor,
+    CapabilityRef,
+    ControlDescriptor,
+    ControlGeometry,
+    DeviceDescriptor,
+    DeviceRef,
+)
 from deckr.runtime import Deckr
 from deckr.state import (
     DeviceClaim,
@@ -43,20 +54,115 @@ def _deckr() -> Deckr:
     )
 
 
-def _device() -> hw_messages.HardwareDevice:
-    return hw_messages.HardwareDevice(
-        id="deck",
-        name="MiraBox",
-        hid="hid:deck",
+def _control() -> ControlDescriptor:
+    return ControlDescriptor(
+        controlId="0,0",
+        kind="bitmap_key",
+        geometry=ControlGeometry(x=0, y=0, width=1, height=1, unit="grid"),
+        inputCapabilities=(
+            CapabilityDescriptor(
+                capabilityId="button.momentary",
+                family=DECKR_INPUT_BUTTON,
+                type="momentary",
+                direction="input",
+                access=("emits",),
+                eventTypes=("down", "up"),
+            ),
+            CapabilityDescriptor(
+                capabilityId="button.press",
+                family=DECKR_INPUT_BUTTON,
+                type="activation",
+                direction="input",
+                access=("emits",),
+                eventTypes=("press",),
+            ),
+        ),
+        outputCapabilities=(
+            CapabilityDescriptor.model_validate(
+                {
+                    "capabilityId": "raster.bitmap",
+                    "family": DECKR_OUTPUT_RASTER,
+                    "type": "bitmap",
+                    "direction": "output",
+                    "access": ["settable"],
+                    "commandTypes": ["set_frame", "clear"],
+                    "constraints": [
+                        {"type": "fixed", "subject": "width", "value": 72},
+                        {"type": "fixed", "subject": "height", "value": 72},
+                    ],
+                }
+            ),
+        ),
+    )
+
+
+def _device() -> DeviceDescriptor:
+    return DeviceDescriptor(
+        deviceId="deck",
+        displayName="MiraBox",
         fingerprint="fingerprint:deck",
-        slots=[
-            hw_messages.HardwareSlot(
-                id="0,0",
-                coordinates=hw_messages.HardwareCoordinates(column=0, row=0),
-                image_format=hw_messages.HardwareImageFormat(width=72, height=72),
-                gestures=("key_down", "key_up"),
-            )
-        ],
+        controls=(_control(),),
+    )
+
+
+def _available_message() -> DeckrMessage:
+    return hw_messages.device_available_message(
+        manager_id="mirabox-main",
+        descriptor=_device(),
+    )
+
+
+def _unavailable_message() -> DeckrMessage:
+    return hw_messages.device_unavailable_message(
+        manager_id="mirabox-main",
+        device_id="deck",
+        reason="test",
+    )
+
+
+def _input_message() -> DeckrMessage:
+    return hw_messages.control_input_message(
+        manager_id="mirabox-main",
+        device_id="deck",
+        fingerprint="fingerprint:deck",
+        control_id="0,0",
+        capability_id="button.momentary",
+        event_type="down",
+        value={"eventType": "down"},
+    )
+
+
+def _command_message(
+    controller_id: str,
+    image: bytes,
+    *,
+    manager_id: str = "mirabox-main",
+) -> DeckrMessage:
+    return hw_messages.control_command_for_capability(
+        controller_id=controller_id,
+        ref=CapabilityRef(
+            deviceRef=DeviceRef(managerId=manager_id, deviceId="deck"),
+            controlId="0,0",
+            capabilityId="raster.bitmap",
+        ),
+        command_type="set_frame",
+        params={
+            "commandType": "set_frame",
+            "image": base64.b64encode(image).decode("ascii"),
+            "encoding": "jpeg",
+        },
+    )
+
+
+def _power_command_message(controller_id: str, command_type: str) -> DeckrMessage:
+    return hw_messages.control_command_for_capability(
+        controller_id=controller_id,
+        ref=CapabilityRef(
+            deviceRef=DeviceRef(managerId="mirabox-main", deviceId="deck"),
+            capabilityId="device.power",
+        ),
+        command_type=command_type,
+        params={"commandType": command_type},
     )
 
 
@@ -81,22 +187,6 @@ def _claim(controller_id: str = "main", session_id: str = "controller-session"):
     )
 
 
-def test_default_manager_id_uses_python_prefix_and_hostname() -> None:
-    assert (
-        default_manager_id(hostname="deckr-box.local")
-        == "mirabox-python-deckr-box.local"
-    )
-
-
-def test_default_manager_id_normalizes_unfriendly_hostname() -> None:
-    assert default_manager_id(hostname=" deckr box!! ") == "mirabox-python-deckr-box"
-    assert default_manager_id(hostname=":::") == "mirabox-python-local"
-
-
-def test_resolve_manager_id_keeps_explicit_override() -> None:
-    assert resolve_manager_id("kitchen") == "kitchen"
-
-
 async def _put_controller_presence(
     deckr: Deckr,
     *,
@@ -117,30 +207,34 @@ async def _put_controller_presence(
     )
 
 
+def test_default_manager_id_uses_python_prefix_and_hostname() -> None:
+    assert (
+        default_manager_id(hostname="deckr-box.local")
+        == "mirabox-python-deckr-box.local"
+    )
+
+
+def test_default_manager_id_normalizes_unfriendly_hostname() -> None:
+    assert default_manager_id(hostname=" deckr box!! ") == "mirabox-python-deckr-box"
+    assert default_manager_id(hostname=":::") == "mirabox-python-local"
+
+
+def test_resolve_manager_id_keeps_explicit_override() -> None:
+    assert resolve_manager_id("kitchen") == "kitchen"
+
+
 @pytest.mark.asyncio
 async def test_connect_and_disconnect_rewrite_aggregate_inventory() -> None:
     async with _deckr() as deckr:
         manager = _factory(deckr)
-        await manager._handle_device_message(
-            hw_messages.hardware_input_message(
-                manager_id="mirabox-main",
-                device_id="deck",
-                body=hw_messages.DeviceConnectedMessage(device=_device()),
-            )
-        )
+        await manager._handle_device_message(_available_message())
         entry = await deckr.state().get(hardware_inventory_key("mirabox-main"))
         assert entry is not None
         inventory = HardwareInventory.model_validate(entry.value)
         assert set(inventory.devices) == {"deck"}
-        assert inventory.devices["deck"].descriptor["id"] == "deck"
+        assert inventory.devices["deck"].descriptor.device_id == "deck"
 
-        await manager._handle_device_message(
-            hw_messages.hardware_input_message(
-                manager_id="mirabox-main",
-                device_id="deck",
-                body=hw_messages.DeviceDisconnectedMessage(),
-            )
-        )
+        await manager._handle_device_message(_unavailable_message())
         entry = await deckr.state().get(hardware_inventory_key("mirabox-main"))
         assert entry is not None
         inventory = HardwareInventory.model_validate(entry.value)
@@ -163,13 +257,7 @@ async def test_inventory_state_unavailable_keeps_local_device_state() -> None:
             hardware_manager_address("mirabox-main")
         )
 
-        await manager._handle_device_message(
-            hw_messages.hardware_input_message(
-                manager_id="mirabox-main",
-                device_id="deck",
-                body=hw_messages.DeviceConnectedMessage(device=_device()),
-            )
-        )
+        await manager._handle_device_message(_available_message())
 
     assert "deck" in manager._devices
     assert manager._inventory_revision is None
@@ -209,13 +297,7 @@ async def test_claimed_input_is_sent_only_to_claiming_controller() -> None:
         other = deckr.lane("hardware_messages").endpoint(controller_address("other"))
 
         async with main.subscribe() as main_stream, other.subscribe() as other_stream:
-            await manager._handle_device_message(
-                hw_messages.hardware_input_message(
-                    manager_id="mirabox-main",
-                    device_id="deck",
-                    body=hw_messages.KeyDownMessage(key_id="0,0"),
-                )
-            )
+            await manager._handle_device_message(_input_message())
             received = await main_stream.receive()
             with anyio.move_on_after(0.05) as scope:
                 await other_stream.receive()
@@ -236,7 +318,9 @@ async def test_claim_delete_resets_device_and_drops_input() -> None:
     async with _deckr() as deckr:
         manager = _factory(deckr)
         device = FakeDevice()
-        command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
+        command_send, command_receive = anyio.create_memory_object_stream(
+            max_buffer_size=100
+        )
         manager._command_streams["deck"] = command_send
         await _put_controller_presence(deckr)
         claim_key = "claim.device.mirabox-main.deck"
@@ -265,13 +349,7 @@ async def test_claim_delete_resets_device_and_drops_input() -> None:
                 while device.clear_key.await_count < 1:
                     await anyio.sleep(0.01)
 
-            await manager._handle_device_message(
-                hw_messages.hardware_input_message(
-                    manager_id="mirabox-main",
-                    device_id="deck",
-                    body=hw_messages.KeyDownMessage(key_id="0,0"),
-                )
-            )
+            await manager._handle_device_message(_input_message())
             with anyio.move_on_after(0.05) as scope:
                 await main_stream.receive()
             tg.cancel_scope.cancel()
@@ -293,7 +371,9 @@ async def test_broker_snapshot_claim_delete_resets_device_and_drops_input() -> N
     async with _deckr() as deckr:
         manager = _factory(deckr)
         device = FakeDevice()
-        command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
+        command_send, command_receive = anyio.create_memory_object_stream(
+            max_buffer_size=100
+        )
         manager._command_streams["deck"] = command_send
         await _put_controller_presence(deckr)
         claim_key = "claim.device.mirabox-main.deck"
@@ -319,13 +399,7 @@ async def test_broker_snapshot_claim_delete_resets_device_and_drops_input() -> N
                 while device.clear_key.await_count < 1:
                     await anyio.sleep(0.01)
 
-            await manager._handle_device_message(
-                hw_messages.hardware_input_message(
-                    manager_id="mirabox-main",
-                    device_id="deck",
-                    body=hw_messages.KeyDownMessage(key_id="0,0"),
-                )
-            )
+            await manager._handle_device_message(_input_message())
             with anyio.move_on_after(0.05) as scope:
                 await main_stream.receive()
             tg.cancel_scope.cancel()
@@ -347,7 +421,9 @@ async def test_claim_without_matching_controller_presence_resets_and_is_unroutab
     async with _deckr() as deckr:
         manager = _factory(deckr)
         device = FakeDevice()
-        command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
+        command_send, command_receive = anyio.create_memory_object_stream(
+            max_buffer_size=100
+        )
         manager._command_streams["deck"] = command_send
         manager._controller_presence_sessions[controller_address("main")] = (
             "different-session"
@@ -372,13 +448,7 @@ async def test_claim_without_matching_controller_presence_resets_and_is_unroutab
                 while device.clear_key.await_count < 1:
                     await anyio.sleep(0.01)
 
-            await manager._handle_device_message(
-                hw_messages.hardware_input_message(
-                    manager_id="mirabox-main",
-                    device_id="deck",
-                    body=hw_messages.KeyDownMessage(key_id="0,0"),
-                )
-            )
+            await manager._handle_device_message(_input_message())
             with anyio.move_on_after(0.05) as scope:
                 await main_stream.receive()
             tg.cancel_scope.cancel()
@@ -403,13 +473,7 @@ async def test_controller_presence_restore_makes_current_claim_routable() -> Non
 
         main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
         async with main.subscribe() as main_stream:
-            await manager._handle_device_message(
-                hw_messages.hardware_input_message(
-                    manager_id="mirabox-main",
-                    device_id="deck",
-                    body=hw_messages.KeyDownMessage(key_id="0,0"),
-                )
-            )
+            await manager._handle_device_message(_input_message())
             received = await main_stream.receive()
 
     assert received.recipient.endpoint == controller_address("main")
@@ -427,7 +491,9 @@ async def test_invalid_claim_payload_is_not_routable() -> None:
     async with _deckr() as deckr:
         manager = _factory(deckr)
         device = FakeDevice()
-        command_send, command_receive = anyio.create_memory_object_stream(max_buffer_size=100)
+        command_send, command_receive = anyio.create_memory_object_stream(
+            max_buffer_size=100
+        )
         manager._command_streams["deck"] = command_send
         await deckr.state().put(
             "claim.device.mirabox-main.deck",
@@ -457,13 +523,7 @@ async def test_invalid_claim_payload_is_not_routable() -> None:
                 while device.clear_key.await_count < 1:
                     await anyio.sleep(0.01)
 
-            await manager._handle_device_message(
-                hw_messages.hardware_input_message(
-                    manager_id="mirabox-main",
-                    device_id="deck",
-                    body=hw_messages.KeyDownMessage(key_id="0,0"),
-                )
-            )
+            await manager._handle_device_message(_input_message())
             with anyio.move_on_after(0.05) as scope:
                 await main_stream.receive()
             tg.cancel_scope.cancel()
@@ -510,55 +570,48 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
                 "mirabox-main",
             )
             await anyio.sleep(0.01)
-            await controller.publish(
-                hw_messages.hardware_command_for_control(
-                    controller_id="main",
-                    ref=hw_messages.HardwareControlRef(
-                        manager_id="other",
-                        device_id="deck",
-                        control_id="0,0",
-                        control_kind="slot",
-                    ),
-                    message_type=hw_messages.SET_IMAGE,
-                    body=hw_messages.SetImageMessage(slot_id="0,0", image=b"wrong"),
-                )
-            )
+            await controller.publish(_command_message("main", b"wrong", manager_id="other"))
             await anyio.sleep(0.05)
             device.set_image.assert_not_awaited()
 
+            other_ref = DeviceRef(managerId="other", deviceId="deck")
             await controller.publish(
                 hw_messages.hardware_message(
                     sender=controller.endpoint,
                     recipient=endpoint_target(manager.endpoint),
-                    subject=hw_messages.hardware_subject(
-                        manager_id="other",
-                        device_id="deck",
-                        control_id="0,0",
-                        control_kind="slot",
+                    subject=hw_messages.hardware_subject_for_capability(
+                        CapabilityRef(
+                            deviceRef=other_ref,
+                            controlId="0,0",
+                            capabilityId="raster.bitmap",
+                        )
                     ),
-                    message_type=hw_messages.SET_IMAGE,
-                    body=hw_messages.SetImageMessage(slot_id="0,0", image=b"wrong"),
+                    message_type=hw_messages.CONTROL_COMMAND,
+                    body=hw_messages.ControlCommandMessage(
+                        deviceRef=other_ref,
+                        controlId="0,0",
+                        capabilityId="raster.bitmap",
+                        commandType="set_frame",
+                        params={
+                            "commandType": "set_frame",
+                            "image": base64.b64encode(b"wrong").decode("ascii"),
+                            "encoding": "jpeg",
+                        },
+                    ),
                 )
             )
             await anyio.sleep(0.05)
             device.set_image.assert_not_awaited()
 
-            await controller.publish(
-                hw_messages.hardware_command_for_control(
-                    controller_id="main",
-                    ref=hw_messages.HardwareControlRef(
-                        manager_id="mirabox-main",
-                        device_id="deck",
-                        control_id="0,0",
-                        control_kind="slot",
-                    ),
-                    message_type=hw_messages.SET_IMAGE,
-                    body=hw_messages.SetImageMessage(slot_id="0,0", image=b"ok"),
-                )
-            )
+            await controller.publish(_command_message("main", b"ok"))
             with anyio.fail_after(1):
                 while device.set_image.await_count < 1:
+                    await anyio.sleep(0.01)
+            await controller.publish(_power_command_message("main", "sleep"))
+            with anyio.fail_after(1):
+                while device.sleep_screen.await_count < 1:
                     await anyio.sleep(0.01)
             tg.cancel_scope.cancel()
 
     device.set_image.assert_awaited_once_with("0,0", b"ok")
+    device.sleep_screen.assert_awaited_once_with()
