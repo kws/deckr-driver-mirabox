@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import socket
 import uuid
 from datetime import UTC, datetime
 
@@ -46,6 +48,8 @@ PRESENCE_HEARTBEAT_SECONDS = 5.0
 PRESENCE_TTL_SECONDS = 15
 _STATE_RECONCILE_SECONDS = 1.0
 _WATCH_RETRY_SECONDS = 1.0
+_DEFAULT_MANAGER_PREFIX = "mirabox-python"
+_INVALID_MANAGER_ID_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _CONTROLLER_PRESENCE_PREFIX = ".".join(
     (
         "presence",
@@ -55,6 +59,22 @@ _CONTROLLER_PRESENCE_PREFIX = ".".join(
         "",
     )
 )
+
+
+def _normalize_manager_id_part(value: str) -> str:
+    normalized = _INVALID_MANAGER_ID_CHARS.sub("-", value.strip())
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-._")
+    return normalized or "local"
+
+
+def default_manager_id(*, hostname: str | None = None) -> str:
+    host = socket.gethostname() if hostname is None else hostname
+    return f"{_DEFAULT_MANAGER_PREFIX}-{_normalize_manager_id_part(host)}"
+
+
+def resolve_manager_id(value: str | None = None) -> str:
+    manager_id = str(value).strip() if value is not None else ""
+    return manager_id or default_manager_id()
 
 
 class MiraboxDeviceFactory(BaseComponent):
@@ -431,24 +451,21 @@ def driver_factory(
     hardware_lane: Lane,
     state: StateStore,
     *,
-    manager_id: str,
+    manager_id: str | None = None,
 ) -> MiraboxDeviceFactory:
     return MiraboxDeviceFactory(
         hardware_lane=hardware_lane,
         state=state,
-        manager_id=manager_id,
+        manager_id=resolve_manager_id(manager_id),
     )
 
 
 def component_factory(context: ComponentContext) -> MiraboxDeviceFactory:
     source = dict(context.raw_config)
-    manager_id = str(source.get("manager_id", "")).strip()
-    if not manager_id:
-        raise ValueError("deckr.drivers.mirabox requires manager_id")
     return driver_factory(
         context.require_lane("hardware_messages"),
         context.state(),
-        manager_id=manager_id,
+        manager_id=source.get("manager_id"),
     )
 
 

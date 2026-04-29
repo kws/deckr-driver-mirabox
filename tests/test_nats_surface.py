@@ -28,7 +28,11 @@ from deckr.drivers.mirabox._discovery import (
     _apply_device_commands,
     _manager_command_subscription,
 )
-from deckr.drivers.mirabox._factory import MiraboxDeviceFactory
+from deckr.drivers.mirabox._factory import (
+    MiraboxDeviceFactory,
+    default_manager_id,
+    resolve_manager_id,
+)
 
 
 def _deckr() -> Deckr:
@@ -75,6 +79,22 @@ def _claim(controller_id: str = "main", session_id: str = "controller-session"):
         timestamp=datetime.now(UTC),
         ttlSeconds=15,
     )
+
+
+def test_default_manager_id_uses_python_prefix_and_hostname() -> None:
+    assert (
+        default_manager_id(hostname="deckr-box.local")
+        == "mirabox-python-deckr-box.local"
+    )
+
+
+def test_default_manager_id_normalizes_unfriendly_hostname() -> None:
+    assert default_manager_id(hostname=" deckr box!! ") == "mirabox-python-deckr-box"
+    assert default_manager_id(hostname=":::") == "mirabox-python-local"
+
+
+def test_resolve_manager_id_keeps_explicit_override() -> None:
+    assert resolve_manager_id("kitchen") == "kitchen"
 
 
 async def _put_controller_presence(
