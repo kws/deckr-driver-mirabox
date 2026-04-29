@@ -1,9 +1,8 @@
 """MiraBox StreamDock protocol implementation."""
 
-from dataclasses import dataclass
 import logging
-from typing import Optional, Protocol, runtime_checkable
-
+from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,7 @@ class DeviceProtocol(Protocol):
     def encode_command(self, command: str, *args, **kwargs) -> list[bytes]: ...
     def parse_event(
         self, report: bytes, hid: str, uid: str
-    ) -> Optional[InteractionEvent]: ...
+    ) -> InteractionEvent | None: ...
 
 
 CMD_PREFIX = b"CRT\x00\x00"
@@ -154,7 +153,7 @@ class MiraBoxProtocol:
         else:
             raise ValueError(f"Unknown command: {command}")
 
-    def parse_event(self, report: bytes) -> Optional[InteractionEvent]:
+    def parse_event(self, report: bytes) -> InteractionEvent | None:
         """Parse a MiraBox HID report into (button_id, payload).
 
         MiraBox format:

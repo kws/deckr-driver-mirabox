@@ -1,6 +1,6 @@
+import logging
 from contextlib import asynccontextmanager
 from functools import cached_property
-import logging
 from typing import Any
 
 import anyio

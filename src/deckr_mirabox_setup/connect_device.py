@@ -1,12 +1,14 @@
+import colorsys
 import random
+import time
+from io import BytesIO
+
+import cairosvg
+import hid
+from PIL import Image, ImageDraw
+
 from deckr.drivers.mirabox._protocol import MiraBoxProtocol
 from deckr.drivers.mirabox._transport import BlockingHidTransport
-import hid
-import time
-from PIL import Image, ImageDraw
-from io import BytesIO
-import colorsys
-import cairosvg
 
 VENDOR_ID = 0x0B00
 PRODUCT_ID = 0x1001
@@ -46,7 +48,7 @@ ARROW_SVG = """
   stroke-dasharray="6 6"
   stroke-dashoffset="6"
 />
-  
+
 </svg>
 """
 
@@ -80,10 +82,7 @@ def generate_random_image(color=None, size=IMAGE_SIZE, text=None, svg=None):
 
     draw = ImageDraw.Draw(img)
     text_color = tuple([255 - c for c in color])
-    if text is None:
-        text = f"{hue:.2f}"
-    else:
-        text = str(text)
+    text = f"{hue:.2f}" if text is None else str(text)
     draw.text((0, 0), text, fill=text_color)
 
     buffer = BytesIO()

@@ -1,10 +1,13 @@
-from pathlib import Path
-from typing import Any, Dict, Generator
-from deckr.drivers.mirabox.layouts._evaluator import eval_policy
-from deckr.drivers.mirabox.layouts._data import Layout
-import yaml
 import json
 import logging
+from collections.abc import Generator
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from deckr.drivers.mirabox.layouts._data import Layout
+from deckr.drivers.mirabox.layouts._evaluator import eval_policy
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +31,12 @@ def resolve_config_files():
                 yield layout_file
 
 
-def parse_layout_file(file: Path) -> Dict[str, Any]:
+def parse_layout_file(file: Path) -> dict[str, Any]:
     if file.suffix in [".yml", ".yaml"]:
-        with open(file, "r") as f:
+        with open(file) as f:
             return yaml.safe_load(f)
     elif file.suffix in [".json"]:
-        with open(file, "r") as f:
+        with open(file) as f:
             return json.load(f)
     else:
         raise ValueError(f"Unsupported file extension: {file.suffix}")

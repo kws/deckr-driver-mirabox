@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import ast
 import re
-from simpleeval import SimpleEval, FeatureNotAvailable
+
+from simpleeval import FeatureNotAvailable, SimpleEval
 
 # -----------------------------
 # Errors

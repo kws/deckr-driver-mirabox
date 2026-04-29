@@ -1,7 +1,7 @@
 import click
 
-from deckr_mirabox_setup.scan import main as scan_main
 from deckr_mirabox_setup.connect_device import main as configure_main
+from deckr_mirabox_setup.scan import main as scan_main
 from deckr_mirabox_setup.wizard import run_wizard
 
 

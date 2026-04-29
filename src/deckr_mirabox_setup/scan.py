@@ -1,9 +1,10 @@
-import hid
 import time
+
+import hid
 
 
 def open_and_read(vendor_id, product_id):
-    for i in range(10):
+    for _i in range(10):
         try:
             dev = hid.device()
             dev.open(vendor_id, product_id)
