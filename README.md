@@ -1,11 +1,12 @@
 # deckr-driver-mirabox
 
-Python MiraBox driver package for Deckr, including the `mirabox-setup` utility and the
-built-in layout definitions used by both the Python and Rust MiraBox lanes.
+Python MiraBox hardware manager package for Deckr, including the `mirabox-setup`
+utility and the built-in layout definitions used by both the Python and Rust
+MiraBox managers.
 
 ## Included tooling
 
-- `deckr.drivers.mirabox` driver entry point
+- `deckr.drivers.mirabox` component entry point
 - `mirabox-setup` console script for setup and control mapping
 
 ## Runtime
