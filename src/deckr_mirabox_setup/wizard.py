@@ -1,4 +1,4 @@
-"""Textual wizard for mapping protocol key IDs to physical slot positions."""
+"""Textual wizard for mapping protocol key IDs to physical control positions."""
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -6,8 +6,8 @@ from textual.containers import Container, Vertical
 from textual.widgets import Footer, Input, RichLog, Static
 from textual.worker import get_current_worker
 
+from deckr_mirabox_setup.control_render import render_control_image
 from deckr_mirabox_setup.device_session import DeviceSession, DeviceSessionError
-from deckr_mirabox_setup.slot_render import render_slot_image
 
 NUM_KEYS_DEFAULT = 25
 SIZE_DEFAULT = 72
@@ -16,7 +16,7 @@ SIZE_MIN = 48
 ROTATIONS = (0, 90, 180, 270)
 
 
-class SlotMappingApp(App[None]):
+class ControlMappingApp(App[None]):
     """Interactive wizard to map protocol key IDs to physical (row, col) positions."""
 
     ENABLE_COMMAND_PALETTE = False
@@ -68,13 +68,13 @@ class SlotMappingApp(App[None]):
             self.query_one("#position-input", Input).focus()
 
     def _send_current_image(self) -> None:
-        """Render and send current slot image to device (runs in worker)."""
+        """Render and send current control image to device (runs in worker)."""
         key_id = self._protocol_key_id()
         rotation = ROTATIONS[self._rotation_index]
-        jpeg = render_slot_image(
+        jpeg = render_control_image(
             key_id, self._image_width, self._image_height, rotation
         )
-        self._session.send_slot_image(key_id, jpeg)
+        self._session.send_control_image(key_id, jpeg)
         self._session.refresh()
 
     def _on_send_done(self) -> None:
@@ -105,7 +105,7 @@ class SlotMappingApp(App[None]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(
-                "MiraBox Slot Mapping — Map protocol key IDs to physical (row,col) positions",
+                "MiraBox Control Mapping — Map protocol key IDs to physical (row,col) positions",
                 id="title",
             )
             yield Static(id="firmware")
@@ -267,19 +267,19 @@ class SlotMappingApp(App[None]):
     def on_exit(self) -> None:
         if self._mapping:
             mapping_str = str(dict(sorted(self._mapping.items())))
-            self.notify(mapping_str, title="Slot mapping complete")
+            self.notify(mapping_str, title="Control mapping complete")
 
 
 def run_wizard(num_keys: int = NUM_KEYS_DEFAULT) -> None:
-    """Run the slot mapping wizard. Exits with error if no device found."""
+    """Run the control mapping wizard. Exits with error if no device found."""
     try:
         with DeviceSession() as session:
-            app = SlotMappingApp(session, num_keys=num_keys)
+            app = ControlMappingApp(session, num_keys=num_keys)
             app.run()
             # Print after app.run() returns; on_exit output is lost when TUI tears down
             print(f"\n{session.device_info}")
             if app._mapping:
-                print(f"Slot mapping: {dict(sorted(app._mapping.items()))}")
+                print(f"Control mapping: {dict(sorted(app._mapping.items()))}")
                 print(f"Size: {app._image_width}x{app._image_height}")
                 print(f"Rotation: {ROTATIONS[app._rotation_index]}")
     except DeviceSessionError as e:

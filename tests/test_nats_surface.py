@@ -540,10 +540,10 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
         id = "deck"
 
         def __init__(self) -> None:
-            self.set_image = AsyncMock()
-            self.clear_slot = AsyncMock()
-            self.sleep_screen = AsyncMock()
-            self.wake_screen = AsyncMock()
+            self.set_raster_frame = AsyncMock()
+            self.clear_raster = AsyncMock()
+            self.sleep_device = AsyncMock()
+            self.wake_device = AsyncMock()
 
     async with _deckr() as deckr:
         device = FakeDevice()
@@ -572,7 +572,7 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
             await anyio.sleep(0.01)
             await controller.publish(_command_message("main", b"wrong", manager_id="other"))
             await anyio.sleep(0.05)
-            device.set_image.assert_not_awaited()
+            device.set_raster_frame.assert_not_awaited()
 
             other_ref = DeviceRef(managerId="other", deviceId="deck")
             await controller.publish(
@@ -601,17 +601,17 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
                 )
             )
             await anyio.sleep(0.05)
-            device.set_image.assert_not_awaited()
+            device.set_raster_frame.assert_not_awaited()
 
             await controller.publish(_command_message("main", b"ok"))
             with anyio.fail_after(1):
-                while device.set_image.await_count < 1:
+                while device.set_raster_frame.await_count < 1:
                     await anyio.sleep(0.01)
             await controller.publish(_power_command_message("main", "sleep"))
             with anyio.fail_after(1):
-                while device.sleep_screen.await_count < 1:
+                while device.sleep_device.await_count < 1:
                     await anyio.sleep(0.01)
             tg.cancel_scope.cancel()
 
-    device.set_image.assert_awaited_once_with("0,0", b"ok")
-    device.sleep_screen.assert_awaited_once_with()
+    device.set_raster_frame.assert_awaited_once_with("0,0", b"ok")
+    device.sleep_device.assert_awaited_once_with()

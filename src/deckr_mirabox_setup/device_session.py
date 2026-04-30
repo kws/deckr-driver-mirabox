@@ -1,4 +1,4 @@
-"""Device session for MiraBox setup wizard: discovery, init, send_slot_image."""
+"""Device session for MiraBox setup wizard: discovery, init, send_control_image."""
 
 import hid
 
@@ -14,7 +14,7 @@ class DeviceSession:
     """Context manager for a MiraBox device session during setup.
 
     Discovers first compatible device, opens transport, runs init sequence.
-    Exposes send_slot_image and refresh.
+    Exposes send_control_image and refresh.
     """
 
     def __init__(self) -> None:
@@ -98,7 +98,7 @@ class DeviceSession:
         self._firmware_version = report[1:-1].decode("ascii", errors="replace")
         self._start_offset = 5 if "Mbox_N4E" in self._firmware_version else 0
 
-        self._write(self._protocol.encode_command("wake_screen"))
+        self._write(self._protocol.encode_command("wake_display"))
         self._write(self._protocol.encode_command("clear_key", target=0xFF))
         self._write(self._protocol.encode_command("set_brightness", value=100))
         self._write(self._protocol.encode_command("refresh"))
@@ -111,8 +111,8 @@ class DeviceSession:
         self._protocol = None
         self._device = None
 
-    def send_slot_image(self, key_id: int, jpeg_bytes: bytes) -> None:
-        """Send JPEG image to the given protocol key slot."""
+    def send_control_image(self, key_id: int, jpeg_bytes: bytes) -> None:
+        """Send JPEG image to the given protocol key control."""
         cmds = self._protocol.encode_command(
             "set_key_image", key=key_id, image=jpeg_bytes, x=0, y=0
         )
@@ -123,7 +123,7 @@ class DeviceSession:
         self._write(self._protocol.encode_command("refresh"))
 
     def clear_key(self, key_id: int) -> None:
-        """Clear the given protocol key slot (blank display)."""
+        """Clear the given protocol key control (blank display)."""
         self._write(self._protocol.encode_command("clear_key", target=key_id))
         self._write(self._protocol.encode_command("refresh"))
 

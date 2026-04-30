@@ -113,7 +113,7 @@ def main():
 
     protocol = MiraBoxProtocol()
 
-    write(protocol.encode_command("wake_screen"))
+    write(protocol.encode_command("wake_display"))
     write(protocol.encode_command("clear_key", target=0xFF))
     time.sleep(1)
 

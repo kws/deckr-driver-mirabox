@@ -6,7 +6,7 @@ built-in layout definitions used by both the Python and Rust MiraBox lanes.
 ## Included tooling
 
 - `deckr.drivers.mirabox` driver entry point
-- `mirabox-setup` console script for setup and slot mapping
+- `mirabox-setup` console script for setup and control mapping
 
 ## Runtime
 

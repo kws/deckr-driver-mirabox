@@ -82,8 +82,8 @@ class MiraBoxProtocol:
         """Encode a command into MiraBox protocol format.
 
         Supported commands:
-        - "wake_screen": Wake the screen (DIS)
-        - "sleep_screen": Sleep the screen (HAN)
+        - "wake_display": Wake the display (DIS)
+        - "sleep_display": Sleep the display (HAN)
         - "clear_key": Clear a key or all keys (CLE + target)
         - "refresh": Refresh the screen (STP)
         - "connect": Connect to the screen (CONNECT)
@@ -93,10 +93,10 @@ class MiraBoxProtocol:
         - "set_background_image": Set background (BGPIC + len + x + y + width + height + frame_buffer)
         """
         logger.debug(f"MiraBox encode_command: {command} args={args} kwargs={kwargs}")
-        if command == "wake_screen":
+        if command == "wake_display":
             return self._to_report_chunks(self._crt("DIS"))
 
-        elif command == "sleep_screen":
+        elif command == "sleep_display":
             return self._to_report_chunks(self._crt("HAN"))
 
         elif command == "clear_key":

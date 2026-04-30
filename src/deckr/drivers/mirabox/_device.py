@@ -137,14 +137,14 @@ class MiraBoxDockDevice:
         """Send multiple payloads to the device."""
         await self.transport.write_chunks(payloads)
 
-    async def wake_screen(self) -> None:
+    async def wake_device(self) -> None:
         """Wake the screen."""
-        payloads = self.protocol.encode_command("wake_screen")
+        payloads = self.protocol.encode_command("wake_display")
         await self.send_payloads(payloads)
 
-    async def sleep_screen(self) -> None:
+    async def sleep_device(self) -> None:
         """Sleep the screen."""
-        payloads = self.protocol.encode_command("sleep_screen")
+        payloads = self.protocol.encode_command("sleep_display")
         await self.send_payloads(payloads)
 
     async def clear_key(self, target: int = 0xFF) -> None:
@@ -173,15 +173,15 @@ class MiraBoxDockDevice:
         payloads = self.protocol.encode_command("set_brightness", value=device_value)
         await self.send_payloads(payloads)
 
-    async def set_image(self, slot_id: str, image: bytes) -> None:
-        """Set a slot image on the private live device."""
-        await self.set_key_image(slot_id, image)
+    async def set_raster_frame(self, control_id: str, image: bytes) -> None:
+        """Set a raster frame on the private live device."""
+        await self.set_key_image(control_id, image)
 
-    async def clear_slot(self, slot_id: str) -> None:
-        """Clear a slot on the private live device."""
-        control = self.layout.get_control_for_name(slot_id)
+    async def clear_raster(self, control_id: str) -> None:
+        """Clear raster output on the private live device."""
+        control = self.layout.get_control_for_name(control_id)
         if control is None:
-            logger.error(f"Slot not found: {slot_id}")
+            logger.error(f"Control not found: {control_id}")
             return
         if not hasattr(control, "display"):
             logger.error(f"Control {control.name} does not have a display")
@@ -194,7 +194,7 @@ class MiraBoxDockDevice:
         """Set a key image.
 
         Args:
-            key: Slot ID (string) or key ID (int)
+            key: Control ID (string) or key ID (int)
             image: Image bytes
             x: X offset (default: 0)
             y: Y offset (default: 0)
@@ -203,7 +203,7 @@ class MiraBoxDockDevice:
         logger.debug(f"Setting key image for key: {key_str}")
         control = self.layout.get_control_for_name(key_str)
         if control is None:
-            logger.error(f"Slot not found for key: {key_str}")
+            logger.error(f"Control not found for key: {key_str}")
             return
         elif not hasattr(control, "display"):
             logger.error(f"Control {control.name} does not have a display")

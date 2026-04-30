@@ -22,14 +22,14 @@ def configure():
     configure_main()
 
 
-@cli.command("map-slots")
+@cli.command("map-controls")
 @click.option(
     "--keys",
     "num_keys",
     type=int,
     default=25,
-    help="Number of display slots to map",
+    help="Number of display controls to map",
 )
-def map_slots(num_keys: int):
-    """Interactive wizard to map protocol key IDs to physical slot positions."""
+def map_controls(num_keys: int):
+    """Interactive wizard to map protocol key IDs to physical control positions."""
     run_wizard(num_keys=num_keys)

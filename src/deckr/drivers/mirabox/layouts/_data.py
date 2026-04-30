@@ -376,27 +376,6 @@ class Layout(BaseModel):
     def get_control_for_name(self, name: str) -> Control | None:
         return self._name_lookup.get(name, None)
 
-    def _slot_type_and_gestures(self, control: Control) -> tuple[str, list[str]]:
-        if isinstance(control, KeyControl):
-            return ("key", ["key_down", "key_up"])
-        if isinstance(control, ButtonControl):
-            return ("button", ["key_down", "key_up"])
-        if isinstance(control, DialControl):
-            return (
-                "encoder",
-                ["encoder_down", "encoder_rotate", "encoder_up"],
-            )
-        if isinstance(control, TouchDialControl):
-            return (
-                "touch_dial",
-                ["encoder_down", "encoder_rotate", "encoder_up", "touch_tap"],
-            )
-        if isinstance(control, TouchStripControl):
-            return ("touch_strip", ["touch_swipe"])
-        if isinstance(control, ScreenControl):
-            return ("screen", [])
-        return ("key", ["key_down", "key_up"])
-
     def get_controls(self) -> list[DeckrControlDescriptor]:
         result = []
         for control in self.controls:

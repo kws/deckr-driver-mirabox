@@ -1,4 +1,4 @@
-"""Render slot number images using invariant-gfx for the mapping wizard."""
+"""Render control number images using invariant-gfx for the mapping wizard."""
 
 import io
 
@@ -20,13 +20,13 @@ def _build_executor() -> Executor:
 _EXECUTOR = _build_executor()
 
 
-def render_slot_image(
-    slot_id: int,
+def render_control_image(
+    control_id: int,
     width: int,
     height: int,
     rotation: int = 0,
 ) -> bytes:
-    """Render a slot number on a dark background at the given dimensions.
+    """Render a control number on a dark background at the given dimensions.
 
     Uses invariant-gfx: create_solid + render_text + composite.
     rotation: degrees (0, 90, 180, 270) applied before encoding.
@@ -52,7 +52,7 @@ def render_slot_image(
         "text": Node(
             op_name="gfx:render_text",
             params={
-                "text": str(slot_id),
+                "text": str(control_id),
                 "font": "Inter",
                 "color": (255, 255, 255, 255),
                 "size": "${decimal('24') * decimal(canvas.width / 72)}",
