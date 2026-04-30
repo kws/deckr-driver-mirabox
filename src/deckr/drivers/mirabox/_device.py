@@ -9,7 +9,7 @@ import anyio
 from deckr.hardware.descriptors import (
     DECKR_DEVICE_POWER,
     CapabilityDescriptor,
-    CapabilityRef,
+    DescriptorCapabilityRef,
     DeviceConnection,
     DeviceDescriptor,
     DeviceIdentifier,
@@ -122,7 +122,7 @@ class MiraBoxDockDevice:
                 ),
             ),
             defaultStatusIndicator=(
-                CapabilityRef(
+                DescriptorCapabilityRef(
                     controlId=first_output.control_id,
                     capabilityId=first_output.output_capabilities[0].capability_id,
                 )
