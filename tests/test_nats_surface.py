@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -9,6 +11,7 @@ import pytest
 from deckr.contracts.lanes import CORE_LANE_CONTRACTS, LaneContractRegistry
 from deckr.contracts.messages import (
     DeckrMessage,
+    EndpointAddress,
     controller_address,
     endpoint_target,
     hardware_manager_address,
@@ -24,6 +27,7 @@ from deckr.hardware.descriptors import (
     DeviceDescriptor,
     DeviceRef,
 )
+from deckr.lanes import RegisteredEndpointLane
 from deckr.runtime import Deckr
 from deckr.state import (
     DeviceClaim,
@@ -44,6 +48,75 @@ from deckr.drivers.mirabox._factory import (
     default_manager_id,
     resolve_manager_id,
 )
+
+MANAGER_SESSION = "manager-session"
+CONTROLLER_SESSION = "controller-session"
+
+
+class EndpointHarness:
+    def __init__(
+        self,
+        deckr: Deckr,
+        endpoint: EndpointAddress,
+        *,
+        session_id: str,
+    ) -> None:
+        self._state = deckr.state()
+        self._registered = RegisteredEndpointLane(
+            lane=deckr.lane("hardware_messages"),
+            endpoint=endpoint,
+            session_id=session_id,
+            state=self._state,
+            metadata={"runtime": "test"},
+        )
+
+    @property
+    def lane(self):
+        return self._registered.lane
+
+    @property
+    def endpoint(self) -> EndpointAddress:
+        return self._registered.endpoint
+
+    @property
+    def session_id(self) -> str:
+        return self._registered.session_id
+
+    async def _ensure_presence(self) -> None:
+        await self._state.put(
+            presence_endpoint_key(lane=self.lane.name, endpoint=self.endpoint),
+            EndpointPresence(
+                endpoint=self.endpoint,
+                lane=self.lane.name,
+                sessionId=self.session_id,
+                timestamp=datetime.now(UTC),
+                ttlSeconds=15,
+            ),
+            ttl=15,
+        )
+
+    async def publish(self, message: DeckrMessage) -> DeckrMessage:
+        await self._ensure_presence()
+        return await self._registered.publish(message)
+
+    async def reply_to(self, request: DeckrMessage, **kwargs) -> DeckrMessage:
+        await self._ensure_presence()
+        return await self._registered.reply_to(request, **kwargs)
+
+    @asynccontextmanager
+    async def subscribe(self) -> AsyncIterator:
+        await self._ensure_presence()
+        async with self._registered.subscribe() as stream:
+            yield stream
+
+
+def _endpoint(
+    deckr: Deckr,
+    endpoint: EndpointAddress,
+    *,
+    session_id: str = CONTROLLER_SESSION,
+) -> EndpointHarness:
+    return EndpointHarness(deckr, endpoint, session_id=session_id)
 
 
 def _deckr() -> Deckr:
@@ -108,6 +181,7 @@ def _device() -> DeviceDescriptor:
 def _available_message() -> DeckrMessage:
     return hw_messages.device_available_message(
         manager_id="mirabox-main",
+        sender_session_id=MANAGER_SESSION,
         descriptor=_device(),
     )
 
@@ -115,6 +189,7 @@ def _available_message() -> DeckrMessage:
 def _unavailable_message() -> DeckrMessage:
     return hw_messages.device_unavailable_message(
         manager_id="mirabox-main",
+        sender_session_id=MANAGER_SESSION,
         device_id="deck",
         reason="test",
     )
@@ -123,6 +198,7 @@ def _unavailable_message() -> DeckrMessage:
 def _input_message() -> DeckrMessage:
     return hw_messages.control_input_message(
         manager_id="mirabox-main",
+        sender_session_id=MANAGER_SESSION,
         device_id="deck",
         fingerprint="fingerprint:deck",
         control_id="0,0",
@@ -140,6 +216,7 @@ def _command_message(
 ) -> DeckrMessage:
     return hw_messages.control_command_for_capability(
         controller_id=controller_id,
+        sender_session_id=CONTROLLER_SESSION,
         ref=CapabilityRef(
             deviceRef=DeviceRef(managerId=manager_id, deviceId="deck"),
             controlId="0,0",
@@ -157,6 +234,7 @@ def _command_message(
 def _power_command_message(controller_id: str, command_type: str) -> DeckrMessage:
     return hw_messages.control_command_for_capability(
         controller_id=controller_id,
+        sender_session_id=CONTROLLER_SESSION,
         ref=CapabilityRef(
             deviceRef=DeviceRef(managerId="mirabox-main", deviceId="deck"),
             capabilityId="device.power",
@@ -172,8 +250,10 @@ def _factory(deckr: Deckr) -> MiraboxDeviceFactory:
         deckr.state(),
         manager_id="mirabox-main",
     )
-    manager._endpoint = deckr.lane("hardware_messages").endpoint(
-        hardware_manager_address("mirabox-main")
+    manager._endpoint = _endpoint(
+        deckr,
+        hardware_manager_address("mirabox-main"),
+        session_id=MANAGER_SESSION,
     )
     return manager
 
@@ -253,8 +333,10 @@ async def test_inventory_state_unavailable_keeps_local_device_state() -> None:
             UnavailableState(),
             manager_id="mirabox-main",
         )
-        manager._endpoint = deckr.lane("hardware_messages").endpoint(
-            hardware_manager_address("mirabox-main")
+        manager._endpoint = _endpoint(
+            deckr,
+            hardware_manager_address("mirabox-main"),
+            session_id=MANAGER_SESSION,
         )
 
         await manager._handle_device_message(_available_message())
@@ -264,22 +346,14 @@ async def test_inventory_state_unavailable_keeps_local_device_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_presence_heartbeat_refreshes_aggregate_inventory() -> None:
+async def test_inventory_publish_writes_aggregate_inventory() -> None:
     async with _deckr() as deckr:
         manager = _factory(deckr)
         manager._devices["deck"] = _device()
 
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(manager._presence_loop)
-            with anyio.fail_after(1):
-                while True:
-                    entry = await deckr.state().get(
-                        hardware_inventory_key("mirabox-main")
-                    )
-                    if entry is not None:
-                        break
-                    await anyio.sleep(0.01)
-            tg.cancel_scope.cancel()
+        await manager._publish_inventory_safely()
+        entry = await deckr.state().get(hardware_inventory_key("mirabox-main"))
+        assert entry is not None
 
     inventory = HardwareInventory.model_validate(entry.value)
     assert set(inventory.devices) == {"deck"}
@@ -293,8 +367,8 @@ async def test_claimed_input_is_sent_only_to_claiming_controller() -> None:
         manager._controller_presence_sessions[controller_address("main")] = (
             "controller-session"
         )
-        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
-        other = deckr.lane("hardware_messages").endpoint(controller_address("other"))
+        main = _endpoint(deckr, controller_address("main"))
+        other = _endpoint(deckr, controller_address("other"), session_id="other-session")
 
         async with main.subscribe() as main_stream, other.subscribe() as other_stream:
             await manager._handle_device_message(_input_message())
@@ -324,7 +398,7 @@ async def test_claim_delete_resets_device_and_drops_input() -> None:
         manager._command_streams["deck"] = command_send
         await _put_controller_presence(deckr)
         claim_key = "claim.device.mirabox-main.deck"
-        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+        main = _endpoint(deckr, controller_address("main"))
 
         async with (
             command_send,
@@ -379,7 +453,11 @@ async def test_broker_snapshot_claim_delete_resets_device_and_drops_input() -> N
         claim_key = "claim.device.mirabox-main.deck"
         await deckr.state().create(claim_key, _claim())
         await manager._reconcile_routing_current_state(reason="test snapshot")
-        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+        main = _endpoint(
+            deckr,
+            controller_address("main"),
+            session_id="different-session",
+        )
 
         async with (
             command_send,
@@ -428,7 +506,11 @@ async def test_claim_without_matching_controller_presence_resets_and_is_unroutab
         manager._controller_presence_sessions[controller_address("main")] = (
             "different-session"
         )
-        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+        main = _endpoint(
+            deckr,
+            controller_address("main"),
+            session_id="different-session",
+        )
 
         async with (
             command_send,
@@ -471,7 +553,7 @@ async def test_controller_presence_restore_makes_current_claim_routable() -> Non
         await manager._reconcile_routing_current_state(reason="test snapshot")
         assert manager._claim_recipient("deck") == controller_address("main")
 
-        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+        main = _endpoint(deckr, controller_address("main"))
         async with main.subscribe() as main_stream:
             await manager._handle_device_message(_input_message())
             received = await main_stream.receive()
@@ -504,7 +586,7 @@ async def test_invalid_claim_payload_is_not_routable() -> None:
             },
         )
         await _put_controller_presence(deckr)
-        main = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+        main = _endpoint(deckr, controller_address("main"))
 
         async with (
             command_send,
@@ -547,10 +629,12 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
 
     async with _deckr() as deckr:
         device = FakeDevice()
-        manager = deckr.lane("hardware_messages").endpoint(
-            hardware_manager_address("mirabox-main")
+        manager = _endpoint(
+            deckr,
+            hardware_manager_address("mirabox-main"),
+            session_id=MANAGER_SESSION,
         )
-        controller = deckr.lane("hardware_messages").endpoint(controller_address("main"))
+        controller = _endpoint(deckr, controller_address("main"))
         command_send, command_receive = (
             anyio.create_memory_object_stream[DeckrMessage](max_buffer_size=100)
         )
@@ -578,6 +662,7 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
             await controller.publish(
                 hw_messages.hardware_message(
                     sender=controller.endpoint,
+                    sender_session_id=controller.session_id,
                     recipient=endpoint_target(manager.endpoint),
                     subject=hw_messages.hardware_subject_for_capability(
                         CapabilityRef(

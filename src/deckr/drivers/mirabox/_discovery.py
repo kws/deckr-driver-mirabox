@@ -8,7 +8,7 @@ import anyio
 import hid
 from deckr.contracts.messages import DeckrMessage, EndpointTarget
 from deckr.hardware import messages as hw_messages
-from deckr.lanes import EndpointLane
+from deckr.lanes import RegisteredEndpointLane
 
 from deckr.drivers.mirabox._device import launch_device
 
@@ -41,7 +41,7 @@ def _hid_interface_sort_key(d: dict[str, Any]) -> tuple[Any, Any]:
 
 @asynccontextmanager
 async def discover_mirabox_devices(
-    endpoint: EndpointLane,
+    endpoint: RegisteredEndpointLane,
     *,
     manager_id: str,
     command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]] | None = None,
@@ -112,7 +112,7 @@ async def discover_loop(send_stream: anyio.abc.ByteStream):
 async def launcher_loop(
     receive_stream: anyio.abc.ByteStream,
     send_stream: anyio.abc.ObjectSendStream[Any],
-    endpoint: EndpointLane,
+    endpoint: RegisteredEndpointLane,
     manager_id: str,
     command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
 ):
@@ -132,6 +132,7 @@ async def launcher_loop(
                 send_stream,
                 connected_device_ids,
                 manager_id,
+                endpoint.session_id,
                 command_streams,
             )
 
@@ -141,6 +142,7 @@ async def device_loop(
     send_stream: anyio.abc.ObjectSendStream[Any],
     connected_device_ids: set[str],
     manager_id: str,
+    sender_session_id: str,
     command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
 ):
     cancelled = anyio.get_cancelled_exc_class()
@@ -175,6 +177,7 @@ async def device_loop(
             await send_stream.send(
                 hw_messages.device_available_message(
                     manager_id=manager_id,
+                    sender_session_id=sender_session_id,
                     descriptor=my_device.device_descriptor,
                 )
             )
@@ -188,6 +191,7 @@ async def device_loop(
                             my_device,
                             send_stream,
                             manager_id,
+                            sender_session_id,
                         )
                         tg.start_soon(
                             _run_until_complete,
@@ -212,6 +216,7 @@ async def device_loop(
         await send_stream.send(
             hw_messages.device_unavailable_message(
                 manager_id=manager_id,
+                sender_session_id=sender_session_id,
                 device_id=device_id,
                 reason="disconnected",
             )
@@ -222,11 +227,13 @@ async def _forward_device_events(
     device: Any,
     send_stream: anyio.abc.ObjectSendStream[Any],
     manager_id: str,
+    sender_session_id: str,
 ) -> None:
     async for event in device.subscribe():
         await send_stream.send(
             hw_messages.control_input_message(
                 manager_id=manager_id,
+                sender_session_id=sender_session_id,
                 device_id=device.id,
                 fingerprint=device.hid,
                 control_id=event.control_id,
@@ -281,7 +288,7 @@ async def _apply_device_commands(
 
 
 async def _manager_command_subscription(
-    endpoint: EndpointLane,
+    endpoint: RegisteredEndpointLane,
     manager_id: str,
     command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
 ) -> None:
