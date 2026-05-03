@@ -141,14 +141,6 @@ def _control() -> ControlDescriptor:
                 access=("emits",),
                 eventTypes=("down", "up"),
             ),
-            CapabilityDescriptor(
-                capabilityId="button.press",
-                family=DECKR_INPUT_BUTTON,
-                type="activation",
-                direction="input",
-                access=("emits",),
-                eventTypes=("press",),
-            ),
         ),
         outputCapabilities=(
             CapabilityDescriptor.model_validate(

@@ -32,6 +32,11 @@ def test_builtin_layout_validates_and_exposes_controls() -> None:
     )
     assert encoder.value_schema == encoder_relative_value_schema()
     assert any(control.control_id == "0,0" for control in controls)
+    key = next(control for control in controls if control.control_id == "0,0")
+    assert [
+        (capability.capability_id, capability.event_types)
+        for capability in key.input_capabilities
+    ] == [("button.momentary", ("down", "up"))]
 
 
 def test_builtin_layout_emits_signed_encoder_delta() -> None:
@@ -48,3 +53,15 @@ def test_builtin_layout_emits_signed_encoder_delta() -> None:
         "delta": -1,
         "direction": "counterclockwise",
     }
+
+
+def test_builtin_layout_key_up_emits_only_momentary_up() -> None:
+    layout_data = yaml.safe_load((BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text())
+    layout = Layout.model_validate(layout_data)
+
+    events = list(layout.to_control_input(InteractionEvent(button_id=1, payload=0), None))
+
+    assert len(events) == 1
+    assert events[0].control_id == "0,0"
+    assert events[0].capability_id == "button.momentary"
+    assert events[0].event_type == "up"

@@ -167,11 +167,7 @@ def _momentary_button_capability() -> CapabilityDescriptor:
     )
 
 
-def _activation_button_capability(
-    control_id: str,
-    *,
-    projected: bool,
-) -> CapabilityDescriptor:
+def _activation_button_capability() -> CapabilityDescriptor:
     payload: dict[str, Any] = {
         "capabilityId": "button.press",
         "family": DECKR_INPUT_BUTTON,
@@ -185,14 +181,6 @@ def _activation_button_capability(
         ),
         "eventTypes": ["press"],
     }
-    if projected:
-        payload["projection"] = {
-            "owner": "hardware_manager",
-            "source": {
-                "controlId": control_id,
-                "capabilityId": "button.momentary",
-            },
-        }
     return CapabilityDescriptor.model_validate(payload)
 
 
@@ -319,24 +307,14 @@ class Layout(BaseModel):
             if isinstance(control, KeyControl | ButtonControl):
                 if control.events.key is not None:
                     input_capabilities.append(_momentary_button_capability())
-                    input_capabilities.append(
-                        _activation_button_capability(control.name, projected=True)
-                    )
                 else:
-                    input_capabilities.append(
-                        _activation_button_capability(control.name, projected=False)
-                    )
+                    input_capabilities.append(_activation_button_capability())
             if isinstance(control, DialControl | TouchDialControl):
                 input_capabilities.append(_encoder_capability())
                 if control.events.key is not None:
                     input_capabilities.append(_momentary_button_capability())
-                    input_capabilities.append(
-                        _activation_button_capability(control.name, projected=True)
-                    )
                 else:
-                    input_capabilities.append(
-                        _activation_button_capability(control.name, projected=False)
-                    )
+                    input_capabilities.append(_activation_button_capability())
             if isinstance(control, TouchDialControl | TouchStripControl):
                 input_capabilities.append(_touch_capability())
             output_capabilities: list[CapabilityDescriptor] = []
@@ -378,12 +356,6 @@ class Layout(BaseModel):
                     capability_id="button.momentary",
                     event_type="up",
                     value={"eventType": "up"},
-                )
-                yield ControlInputEvent(
-                    control_id=control_name,
-                    capability_id="button.press",
-                    event_type="press",
-                    value={"eventType": "press"},
                 )
             else:
                 yield ControlInputEvent(
