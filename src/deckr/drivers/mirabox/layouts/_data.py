@@ -4,13 +4,19 @@ from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
+from deckr.hardware.capabilities import (
+    button_activation_value_schema,
+    button_momentary_value_schema,
+    encoder_relative_value_schema,
+    raster_bitmap_command_schema,
+    touch_gesture_value_schema,
+)
 from deckr.hardware.descriptors import (
     DECKR_INPUT_BUTTON,
     DECKR_INPUT_ENCODER,
     DECKR_INPUT_TOUCH,
     DECKR_OUTPUT_RASTER,
     CapabilityDescriptor,
-    CapabilitySchema,
     ControlGeometry,
 )
 from deckr.hardware.descriptors import (
@@ -149,74 +155,6 @@ class Heartbeat(BaseModel):
 ControlDescriptor = namedtuple("ControlDescriptor", ["event_type", "control"])
 
 
-def _button_value_schema(events: tuple[str, ...], schema_id: str) -> CapabilitySchema:
-    return CapabilitySchema.model_validate(
-        {
-            "schemaId": schema_id,
-            "schema": {
-                "type": "object",
-                "required": ["eventType"],
-                "properties": {"eventType": {"enum": list(events)}},
-                "additionalProperties": False,
-            },
-        }
-    )
-
-
-def _encoder_value_schema() -> CapabilitySchema:
-    return CapabilitySchema.model_validate(
-        {
-            "schemaId": "deckr.value.input.encoder.relative.v1",
-            "schema": {
-                "type": "object",
-                "required": ["delta"],
-                "properties": {
-                    "delta": {"type": "integer"},
-                    "direction": {"enum": ["clockwise", "counterclockwise"]},
-                },
-                "additionalProperties": False,
-            },
-        }
-    )
-
-
-def _touch_value_schema() -> CapabilitySchema:
-    return CapabilitySchema.model_validate(
-        {
-            "schemaId": "deckr.value.input.touch.gesture.v1",
-            "schema": {
-                "type": "object",
-                "required": ["eventType"],
-                "properties": {
-                    "eventType": {"enum": ["tap", "swipe"]},
-                    "direction": {"enum": ["left", "right"]},
-                },
-                "additionalProperties": False,
-            },
-        }
-    )
-
-
-def _raster_command_schema(width: int, height: int) -> CapabilitySchema:
-    return CapabilitySchema.model_validate(
-        {
-            "schemaId": "deckr.command.output.raster.bitmap.v1",
-            "schema": {
-                "type": "object",
-                "required": ["commandType"],
-                "properties": {
-                    "commandType": {"enum": ["set_frame", "clear"]},
-                    "image": {"type": "string", "contentEncoding": "base64"},
-                    "encoding": {"enum": ["jpeg", "png"]},
-                    "width": {"const": width},
-                    "height": {"const": height},
-                },
-                "additionalProperties": False,
-            },
-        }
-    )
-
-
 def _momentary_button_capability() -> CapabilityDescriptor:
     return CapabilityDescriptor(
         capabilityId="button.momentary",
@@ -224,10 +162,7 @@ def _momentary_button_capability() -> CapabilityDescriptor:
         type="momentary",
         direction="input",
         access=("emits",),
-        valueSchema=_button_value_schema(
-            ("down", "up"),
-            "deckr.value.input.button.momentary.v1",
-        ),
+        valueSchema=button_momentary_value_schema(),
         eventTypes=("down", "up"),
     )
 
@@ -243,10 +178,11 @@ def _activation_button_capability(
         "type": "activation",
         "direction": "input",
         "access": ["emits"],
-        "valueSchema": _button_value_schema(
-            ("press",),
-            "deckr.value.input.button.activation.v1",
-        ).model_dump(by_alias=True, exclude_none=True, mode="json"),
+        "valueSchema": button_activation_value_schema().model_dump(
+            by_alias=True,
+            exclude_none=True,
+            mode="json",
+        ),
         "eventTypes": ["press"],
     }
     if projected:
@@ -268,7 +204,7 @@ def _encoder_capability() -> CapabilityDescriptor:
             "type": "relative",
             "direction": "input",
             "access": ["emits"],
-            "valueSchema": _encoder_value_schema().model_dump(
+            "valueSchema": encoder_relative_value_schema().model_dump(
                 by_alias=True,
                 exclude_none=True,
                 mode="json",
@@ -296,7 +232,7 @@ def _touch_capability() -> CapabilityDescriptor:
         type="gesture",
         direction="input",
         access=("emits",),
-        valueSchema=_touch_value_schema(),
+        valueSchema=touch_gesture_value_schema(),
         eventTypes=("tap", "swipe"),
     )
 
@@ -309,9 +245,9 @@ def _raster_capability(format: ImageFormat) -> CapabilityDescriptor:
             "type": "bitmap",
             "direction": "output",
             "access": ["settable"],
-            "commandSchema": _raster_command_schema(
-                format.width,
-                format.height,
+            "commandSchema": raster_bitmap_command_schema(
+                width=format.width,
+                height=format.height,
             ).model_dump(by_alias=True, exclude_none=True, mode="json"),
             "commandTypes": ["set_frame", "clear"],
             "constraints": [

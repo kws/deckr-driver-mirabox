@@ -224,7 +224,6 @@ def _command_message(
         ),
         command_type="set_frame",
         params={
-            "commandType": "set_frame",
             "image": base64.b64encode(image).decode("ascii"),
             "encoding": "jpeg",
         },
@@ -240,7 +239,7 @@ def _power_command_message(controller_id: str, command_type: str) -> DeckrMessag
             capabilityId="device.power",
         ),
         command_type=command_type,
-        params={"commandType": command_type},
+        params={},
     )
 
 
@@ -678,7 +677,6 @@ async def test_direct_commands_are_applied_only_when_addressed_to_manager() -> N
                         capabilityId="raster.bitmap",
                         commandType="set_frame",
                         params={
-                            "commandType": "set_frame",
                             "image": base64.b64encode(b"wrong").decode("ascii"),
                             "encoding": "jpeg",
                         },

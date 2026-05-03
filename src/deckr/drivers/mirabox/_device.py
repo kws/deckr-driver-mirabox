@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
+from deckr.hardware.capabilities import device_power_command_schema
 from deckr.hardware.descriptors import (
     DECKR_DEVICE_POWER,
     CapabilityDescriptor,
@@ -31,6 +32,7 @@ def _power_capability() -> CapabilityDescriptor:
         type="screen",
         direction="command",
         access=("invokable",),
+        commandSchema=device_power_command_schema(),
         commandTypes=("sleep", "wake"),
     )
 

@@ -1,4 +1,5 @@
 import base64
+import binascii
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -8,7 +9,14 @@ import anyio
 import hid
 from deckr.contracts.messages import DeckrMessage, EndpointTarget
 from deckr.hardware import messages as hw_messages
+from deckr.hardware.capabilities import (
+    RasterBitmapClearParams,
+    RasterBitmapSetFrameParams,
+    device_power_command_params,
+    raster_bitmap_command_params,
+)
 from deckr.lanes import RegisteredEndpointLane
+from pydantic import ValidationError
 
 from deckr.drivers.mirabox._device import launch_device
 
@@ -269,6 +277,11 @@ async def _apply_device_commands(
         if not isinstance(message, hw_messages.ControlCommandMessage):
             continue
         if message.capability_id == "device.power":
+            try:
+                device_power_command_params(message.params)
+            except ValidationError as exc:
+                logger.warning("Ignoring invalid power command params: %s", exc)
+                continue
             if message.command_type == "wake":
                 await device.wake_device()
             elif message.command_type == "sleep":
@@ -276,14 +289,20 @@ async def _apply_device_commands(
             continue
         if message.capability_id != "raster.bitmap" or message.control_id is None:
             continue
-        if message.command_type == "set_frame":
-            encoded = message.params.get("image")
-            if isinstance(encoded, str):
+        try:
+            params = raster_bitmap_command_params(message.command_type, message.params)
+        except (ValueError, ValidationError) as exc:
+            logger.warning("Ignoring invalid raster command params: %s", exc)
+            continue
+        if isinstance(params, RasterBitmapSetFrameParams):
+            try:
                 await device.set_raster_frame(
                     message.control_id,
-                    base64.b64decode(encoded),
+                    base64.b64decode(params.image, validate=True),
                 )
-        elif message.command_type == "clear":
+            except (ValueError, binascii.Error) as exc:
+                logger.warning("Ignoring invalid raster image payload: %s", exc)
+        elif isinstance(params, RasterBitmapClearParams):
             await device.clear_raster(message.control_id)
 
 
