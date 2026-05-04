@@ -30,6 +30,8 @@ from deckr.hardware.descriptors import (
 from deckr.lanes import RegisteredEndpointLane
 from deckr.runtime import Deckr
 from deckr.state import (
+    DEFAULT_DISCOVERY_STATE_STORE_NAME,
+    DEFAULT_LEASE_STATE_STORE_NAME,
     DeviceClaim,
     EndpointPresence,
     HardwareInventory,
@@ -90,9 +92,9 @@ class EndpointHarness:
                 lane=self.lane.name,
                 sessionId=self.session_id,
                 timestamp=datetime.now(UTC),
-                ttlSeconds=90,
+                ttlSeconds=30,
             ),
-            ttl=90,
+            ttl=30,
         )
 
     async def publish(self, message: DeckrMessage) -> DeckrMessage:
@@ -238,7 +240,8 @@ def _power_command_message(controller_id: str, command_type: str) -> DeckrMessag
 def _factory(deckr: Deckr) -> MiraboxDeviceFactory:
     manager = MiraboxDeviceFactory(
         deckr.lane("hardware_messages"),
-        deckr.state(),
+        deckr.state(DEFAULT_LEASE_STATE_STORE_NAME),
+        deckr.state(DEFAULT_DISCOVERY_STATE_STORE_NAME),
         manager_id="mirabox-main",
     )
     manager._endpoint = _endpoint(
@@ -254,7 +257,7 @@ def _claim(controller_id: str = "main", session_id: str = "controller-session"):
         claimedByEndpoint=controller_address(controller_id),
         claimedBySessionId=session_id,
         timestamp=datetime.now(UTC),
-        ttlSeconds=90,
+        ttlSeconds=30,
     )
 
 
@@ -265,14 +268,14 @@ async def _put_controller_presence(
     session_id: str = "controller-session",
 ) -> None:
     endpoint = controller_address(controller_id)
-    await deckr.state().put(
+    await deckr.state(DEFAULT_LEASE_STATE_STORE_NAME).put(
         presence_endpoint_key(lane="hardware_messages", endpoint=endpoint),
         EndpointPresence(
             endpoint=endpoint,
             lane="hardware_messages",
             sessionId=session_id,
             timestamp=datetime.now(UTC),
-            ttlSeconds=90,
+            ttlSeconds=30,
             metadata={},
         ),
     )
@@ -299,14 +302,18 @@ async def test_connect_and_disconnect_rewrite_aggregate_inventory() -> None:
     async with _deckr() as deckr:
         manager = _factory(deckr)
         await manager._handle_device_message(_available_message())
-        entry = await deckr.state().get(hardware_inventory_key("mirabox-main"))
+        entry = await deckr.state(DEFAULT_DISCOVERY_STATE_STORE_NAME).get(
+            hardware_inventory_key("mirabox-main")
+        )
         assert entry is not None
         inventory = HardwareInventory.model_validate(entry.value)
         assert set(inventory.devices) == {"deck"}
         assert inventory.devices["deck"].descriptor.device_id == "deck"
 
         await manager._handle_device_message(_unavailable_message())
-        entry = await deckr.state().get(hardware_inventory_key("mirabox-main"))
+        entry = await deckr.state(DEFAULT_DISCOVERY_STATE_STORE_NAME).get(
+            hardware_inventory_key("mirabox-main")
+        )
         assert entry is not None
         inventory = HardwareInventory.model_validate(entry.value)
         assert inventory.devices == {}
@@ -321,6 +328,7 @@ async def test_inventory_state_unavailable_keeps_local_device_state() -> None:
     async with _deckr() as deckr:
         manager = MiraboxDeviceFactory(
             deckr.lane("hardware_messages"),
+            deckr.state(DEFAULT_LEASE_STATE_STORE_NAME),
             UnavailableState(),
             manager_id="mirabox-main",
         )
@@ -343,7 +351,9 @@ async def test_inventory_publish_writes_aggregate_inventory() -> None:
         manager._devices["deck"] = _device()
 
         await manager._publish_inventory_safely()
-        entry = await deckr.state().get(hardware_inventory_key("mirabox-main"))
+        entry = await deckr.state(DEFAULT_DISCOVERY_STATE_STORE_NAME).get(
+            hardware_inventory_key("mirabox-main")
+        )
         assert entry is not None
 
     inventory = HardwareInventory.model_validate(entry.value)
@@ -479,6 +489,31 @@ async def test_broker_snapshot_claim_delete_resets_device_and_drops_input() -> N
 
 
 @pytest.mark.asyncio
+async def test_prefix_observation_omissions_keep_current_routing(monkeypatch) -> None:
+    async with _deckr() as deckr:
+        manager = _factory(deckr)
+        await _put_controller_presence(deckr)
+        await deckr.state().create("claim.device.mirabox-main.deck", _claim())
+        await manager._reconcile_routing_current_state(reason="initial snapshot")
+        assert manager._claim_recipient("deck") == controller_address("main")
+
+        async def omitted_items(prefix: str = ""):
+            del prefix
+            return ()
+
+        monkeypatch.setattr(
+            deckr.state(DEFAULT_LEASE_STATE_STORE_NAME),
+            "items",
+            omitted_items,
+        )
+
+        await manager._reconcile_routing_current_state(reason="omitted snapshot")
+
+        assert manager._claim_recipient("deck") == controller_address("main")
+        assert "deck" in manager._claims
+
+
+@pytest.mark.asyncio
 async def test_claim_without_matching_controller_presence_resets_and_is_unroutable() -> None:
     class FakeDevice:
         id = "deck"
@@ -573,7 +608,7 @@ async def test_invalid_claim_payload_is_not_routable() -> None:
             {
                 "claimedByEndpoint": "controller:main",
                 "timestamp": datetime.now(UTC).isoformat(),
-                "ttlSeconds": 90,
+                "ttlSeconds": 30,
             },
         )
         await _put_controller_presence(deckr)
