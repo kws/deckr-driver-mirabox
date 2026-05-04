@@ -492,21 +492,21 @@ def driver_factory(
 
 
 def component_factory(context: ComponentContext) -> MiraboxDeviceFactory:
-    source = dict(context.raw_config)
     return driver_factory(
         context.require_lane("hardware_messages"),
         context.state(DEFAULT_LEASE_STATE_STORE_NAME),
         context.state(DEFAULT_DISCOVERY_STATE_STORE_NAME),
-        manager_id=source.get("manager_id"),
+        manager_id=context.require_endpoint_id("hardware_manager"),
     )
 
 
 component = ComponentDefinition(
     manifest=ComponentManifest(
-        component_id="deckr.drivers.mirabox",
-        config_prefix="deckr.drivers.mirabox",
+        component_id="com.k-si.deckr.hardware.mirabox",
         consumes=("hardware_messages",),
         publishes=("hardware_messages",),
+        endpoint_slots=("hardware_manager",),
+        role="hardware_manager",
     ),
     factory=component_factory,
 )

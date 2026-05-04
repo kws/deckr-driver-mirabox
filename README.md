@@ -6,21 +6,25 @@ MiraBox managers.
 
 ## Included tooling
 
-- `deckr.drivers.mirabox` component entry point
+- `com.k-si.deckr.hardware.mirabox` component entry point
 - `mirabox-setup` console script for setup and control mapping
 
 ## Runtime
 
 The Python manager participates as `hardware_manager:<manager-id>` on the
-`hardware_messages` lane. If `manager_id` is omitted from
-`[deckr.drivers.mirabox]`, it defaults to `mirabox-python-<hostname>`.
+`hardware_messages` lane. The manager id comes from the generic component
+instance's `endpoints.hardware_manager` value.
 
-Set `manager_id` explicitly only when the manager identity is part of deployment
-policy, such as room-pinned controller device config:
+Set the hardware manager endpoint id explicitly when the manager identity is
+part of deployment policy, such as room-pinned controller device config:
 
 ```toml
-[deckr.drivers.mirabox]
-manager_id = "kitchen"
+[deckr.components.instances.mirabox_kitchen]
+component = "com.k-si.deckr.hardware.mirabox"
+instance_id = "kitchen"
+
+[deckr.components.instances.mirabox_kitchen.endpoints]
+hardware_manager = "kitchen"
 ```
 
 ## Known limitation
