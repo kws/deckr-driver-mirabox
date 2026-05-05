@@ -502,7 +502,7 @@ def component_factory(context: ComponentContext) -> MiraboxDeviceFactory:
 
 component = ComponentDefinition(
     manifest=ComponentManifest(
-        component_id="com.k-si.deckr.hardware.mirabox",
+        component_id="dev.deckr.hardware.mirabox",
         consumes=("hardware_messages",),
         publishes=("hardware_messages",),
         endpoint_slots=("hardware_manager",),

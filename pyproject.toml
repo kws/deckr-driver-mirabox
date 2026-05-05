@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.entry-points."deckr.components"]
-"com.k-si.deckr.hardware.mirabox" = "deckr.drivers.mirabox:component"
+"dev.deckr.hardware.mirabox" = "deckr.drivers.mirabox:component"
 
 [project.scripts]
 mirabox-setup = "deckr_mirabox_setup.cli:cli"

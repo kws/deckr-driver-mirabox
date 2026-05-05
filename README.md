@@ -6,7 +6,7 @@ MiraBox managers.
 
 ## Included tooling
 
-- `com.k-si.deckr.hardware.mirabox` component entry point
+- `dev.deckr.hardware.mirabox` component entry point
 - `mirabox-setup` console script for setup and control mapping
 
 ## Runtime
@@ -20,7 +20,7 @@ part of deployment policy, such as room-pinned controller device config:
 
 ```toml
 [deckr.components.instances.mirabox_kitchen]
-component = "com.k-si.deckr.hardware.mirabox"
+component = "dev.deckr.hardware.mirabox"
 instance_id = "kitchen"
 
 [deckr.components.instances.mirabox_kitchen.endpoints]
