@@ -80,7 +80,7 @@ def render_control_image(
         ),
     }
     context = {"canvas": {"width": width, "height": height}}
-    results = _EXECUTOR.execute(graph, context=context)
+    results = _EXECUTOR.execute(graph, ["output"], context=context)
     image = results["output"].image
     if rotation != 0:
         image = image.rotate(rotation)

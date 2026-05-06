@@ -352,8 +352,8 @@ requires-dist = [
     { name = "click", specifier = ">=8.3.1,<9.0.0" },
     { name = "deckr", editable = "../deckr" },
     { name = "hidapi", specifier = ">=0.15.0,<0.16.0" },
-    { name = "invariant-core", specifier = ">=0.4.0,<1.0.0" },
-    { name = "invariant-gfx", specifier = "==0.2.0" },
+    { name = "invariant-core", specifier = ">=0.6.0,<1.0.0" },
+    { name = "invariant-gfx", specifier = ">=0.4.0" },
     { name = "pillow", specifier = ">=12.1.0,<13.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3,<7.0.0" },
     { name = "simpleeval", specifier = ">=1.0.3,<2.0.0" },
@@ -565,21 +565,21 @@ wheels = [
 
 [[package]]
 name = "invariant-core"
-version = "0.4.0"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cachetools" },
     { name = "cel-python" },
     { name = "diskcache" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/66/0e2fade263fcedbd688eb6d70a6546dedf08b811790a393ff243a36d93d7/invariant_core-0.4.0.tar.gz", hash = "sha256:908bac76de6f6ac4d45344af926cbb29500aa82455df1048df9660d150a0d052", size = 240687, upload-time = "2026-04-23T17:06:26.197Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/d4/8d16bee366226d8f2d28c81f05214791ebdf84001a8a3d4374c93240378b/invariant_core-0.6.0.tar.gz", hash = "sha256:ad84cf3c8583dba3c0d15b9fac0047c06d64addcf2cb5c02434ec411fbb75484", size = 290957, upload-time = "2026-05-06T12:19:08.381Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/4b/2b4476aedab212fcd25c224a077db679a6cab8bd7a7054c47483cb4b950c/invariant_core-0.4.0-py3-none-any.whl", hash = "sha256:d899b1f030bb80119cebbf37cd081b0f3f1a84c641a6f095101aeb93352a20bd", size = 38085, upload-time = "2026-04-23T17:06:27.54Z" },
+    { url = "https://files.pythonhosted.org/packages/99/92/68d8d7e2a02aa4a6d9a2bf9bfdeac5bc86c0ccb7e651ca053335fd0b034d/invariant_core-0.6.0-py3-none-any.whl", hash = "sha256:127681edfd694c7cac00b1bcd1f868df5c45e580967ea4a62419c48766351915", size = 46795, upload-time = "2026-05-06T12:19:07.035Z" },
 ]
 
 [[package]]
 name = "invariant-gfx"
-version = "0.2.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cairosvg" },
@@ -588,9 +588,9 @@ dependencies = [
     { name = "justmytype" },
     { name = "pillow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/94/3b/47e282a42935abfda23a6bf36a1a48f3e44976b83706d8d2160714aac31f/invariant_gfx-0.2.0.tar.gz", hash = "sha256:f147e5b43cb789ef3460b53fc162bd6f02bca8f60d5842439d2ff79e5c890a6e", size = 155549, upload-time = "2026-04-21T09:05:37.148Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/53/9f6b11ab5a45a155ef407fbed36f503269779b69b2772109877e39be1469/invariant_gfx-0.4.0.tar.gz", hash = "sha256:0776fc4a2626c08d7af0dd8b85db2075f30c7955e0f8dd45bb357bf2351983bd", size = 162668, upload-time = "2026-05-06T12:40:06.646Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d6/d0/372a05c1836e359061426a54a6eb509d713d2ded9cb337809071f26f3698/invariant_gfx-0.2.0-py3-none-any.whl", hash = "sha256:be7495a1d8791c9b702d615a92fc26966cff5eabcc24e145a0fc1f52aff42a9d", size = 56194, upload-time = "2026-04-21T09:05:38.42Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/ba/986680ff987b916827125a42098be68586a746265b328e13fb534bac3bea/invariant_gfx-0.4.0-py3-none-any.whl", hash = "sha256:22e3fb7076cbf3b71ea1e8fced98a5ccef2698cd8e7ebd869dbb52472c809bb4", size = 58466, upload-time = "2026-05-06T12:40:04.547Z" },
 ]
 
 [[package]]
