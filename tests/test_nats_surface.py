@@ -243,6 +243,7 @@ def _factory(deckr: Deckr) -> MiraboxDeviceFactory:
         deckr.state(DEFAULT_LEASE_STATE_STORE_NAME),
         deckr.state(DEFAULT_DISCOVERY_STATE_STORE_NAME),
         manager_id="mirabox-main",
+        labels={"location": "desk"},
     )
     manager._endpoint = _endpoint(
         deckr,
@@ -307,6 +308,7 @@ async def test_connect_and_disconnect_rewrite_aggregate_inventory() -> None:
         )
         assert entry is not None
         inventory = HardwareInventory.model_validate(entry.value)
+        assert inventory.labels == {"location": "desk"}
         assert set(inventory.devices) == {"deck"}
         assert inventory.devices["deck"].descriptor.device_id == "deck"
 
@@ -357,6 +359,7 @@ async def test_inventory_publish_writes_aggregate_inventory() -> None:
         assert entry is not None
 
     inventory = HardwareInventory.model_validate(entry.value)
+    assert inventory.labels == {"location": "desk"}
     assert set(inventory.devices) == {"deck"}
 
 

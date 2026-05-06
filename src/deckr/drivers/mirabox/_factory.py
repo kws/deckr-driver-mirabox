@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
+from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 
@@ -79,6 +80,24 @@ def resolve_manager_id(value: str | None = None) -> str:
     return manager_id or default_manager_id()
 
 
+def _labels_from_config(config: Mapping[str, object] | None) -> dict[str, str]:
+    raw = dict(config or {}).get("labels", {})
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("MiraBox manager config.labels must be a table")
+    labels: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("MiraBox manager config.labels keys must be strings")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                f"MiraBox manager config.labels.{key} must be a non-empty string"
+            )
+        labels[key.strip()] = value.strip()
+    return labels
+
+
 class MiraboxDeviceFactory(BaseComponent):
     def __init__(
         self,
@@ -87,12 +106,14 @@ class MiraboxDeviceFactory(BaseComponent):
         discovery_state: StateStore,
         *,
         manager_id: str,
+        labels: Mapping[str, str] | None = None,
     ):
         super().__init__("mirabox_device_factory")
         self._hardware_lane = hardware_lane
         self._lease_state = lease_state
         self._discovery_state = discovery_state
         self.manager_id = manager_id
+        self._labels = dict(labels or {})
         self._session_id = ""
         self._cancel_scope: anyio.CancelScope | None = None
         self._endpoint_cm: (
@@ -217,6 +238,7 @@ class MiraboxDeviceFactory(BaseComponent):
                 managerEndpoint=self._endpoint.endpoint,
                 sessionId=self._session_id,
                 timestamp=datetime.now(UTC),
+                labels=self._labels,
                 devices={
                     device_id: HardwareInventoryDevice(
                         deviceRef=DeviceRef(
@@ -482,12 +504,14 @@ def driver_factory(
     discovery_state: StateStore,
     *,
     manager_id: str | None = None,
+    labels: Mapping[str, str] | None = None,
 ) -> MiraboxDeviceFactory:
     return MiraboxDeviceFactory(
         hardware_lane=hardware_lane,
         lease_state=lease_state,
         discovery_state=discovery_state,
         manager_id=resolve_manager_id(manager_id),
+        labels=labels,
     )
 
 
@@ -497,6 +521,7 @@ def component_factory(context: ComponentContext) -> MiraboxDeviceFactory:
         context.state(DEFAULT_LEASE_STATE_STORE_NAME),
         context.state(DEFAULT_DISCOVERY_STATE_STORE_NAME),
         manager_id=context.require_endpoint_id("hardware_manager"),
+        labels=_labels_from_config(context.config),
     )
 
 
