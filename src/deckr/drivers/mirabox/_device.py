@@ -178,6 +178,7 @@ class MiraBoxDockDevice:
     async def set_raster_frame(self, control_id: str, image: bytes) -> None:
         """Set a raster frame on the private live device."""
         await self.set_key_image(control_id, image)
+        await self.refresh()
 
     async def clear_raster(self, control_id: str) -> None:
         """Clear raster output on the private live device."""
@@ -189,6 +190,7 @@ class MiraBoxDockDevice:
             logger.error(f"Control {control.name} does not have a display")
             return
         await self.clear_key(target=control.display.id)
+        await self.refresh()
 
     async def set_key_image(
         self, key: str | int, image: bytes, x: int = 0, y: int = 0
