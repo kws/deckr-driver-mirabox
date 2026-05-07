@@ -272,9 +272,11 @@ class Layout(BaseModel):
     name: str
     candidate: str
     match: str
+    protocol_version: int
 
     init_sequence: list[InitCommand] = Field(default_factory=list)
     heartbeats: list[Heartbeat] = Field(default_factory=list)
+    teardown_sequence: list[InitCommand] = Field(default_factory=list)
 
     controls: list[DiscriminatedControl] = Field(default_factory=list)
     image_config: dict[str, ImageFormat]
@@ -283,6 +285,9 @@ class Layout(BaseModel):
     _name_lookup: dict[str, Control]
 
     def model_post_init(self, __context) -> None:
+        if self.protocol_version not in {1, 2, 3}:
+            raise ValueError("protocol_version must be 1, 2, or 3")
+
         event_map = {}
         for control in self.controls:
             for event_type, event_id in control.events:
@@ -350,6 +355,20 @@ class Layout(BaseModel):
         control_name = control_descriptor.control.name
 
         if control_descriptor.event_type == "key":
+            if not event.supports_release:
+                yield ControlInputEvent(
+                    control_id=control_name,
+                    capability_id="button.momentary",
+                    event_type="down",
+                    value={"eventType": "down"},
+                )
+                yield ControlInputEvent(
+                    control_id=control_name,
+                    capability_id="button.momentary",
+                    event_type="up",
+                    value={"eventType": "up"},
+                )
+                return
             if event.payload == 0:
                 yield ControlInputEvent(
                     control_id=control_name,

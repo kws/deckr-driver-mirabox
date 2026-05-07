@@ -82,7 +82,7 @@ async def test_set_raster_frame_refreshes_after_sending_image() -> None:
     await device.set_raster_frame("0,0", b"jpeg")
 
     assert protocol.commands == [
-        ("set_key_image", {"key": 7, "image": b"jpeg", "x": 0, "y": 0}),
+        ("set_key_image", {"key": 7, "image": b"jpeg"}),
         ("refresh", {}),
     ]
     assert transport.writes == [[b"set_key_image"], [b"refresh"]]

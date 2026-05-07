@@ -1,7 +1,7 @@
 """MiraBox StreamDock device implementation."""
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -19,7 +19,11 @@ from deckr.hardware.descriptors import (
 from deckr.drivers.mirabox._protocol import DeviceProtocol, MiraBoxProtocol
 from deckr.drivers.mirabox._transport import AsyncHidTransport, descriptors_for_path
 from deckr.drivers.mirabox.layouts import Layout, search_candidates
-from deckr.drivers.mirabox.layouts._data import ControlInputEvent, Heartbeat
+from deckr.drivers.mirabox.layouts._data import (
+    ControlInputEvent,
+    Heartbeat,
+    InitCommand,
+)
 from deckr.drivers.mirabox.layouts._evaluator import eval_policy
 
 logger = logging.getLogger(__name__)
@@ -168,11 +172,9 @@ class MiraBoxDockDevice:
         """Set screen brightness.
 
         Args:
-            value: Brightness percentage (0-100), converted to device range (0-255)
+            value: Brightness percentage (0-100)
         """
-        # Convert 0-100 percentage to 0-255 device range
-        device_value = int((value / 100) * 255)
-        payloads = self.protocol.encode_command("set_brightness", value=device_value)
+        payloads = self.protocol.encode_command("set_brightness", value=value)
         await self.send_payloads(payloads)
 
     async def set_raster_frame(self, control_id: str, image: bytes) -> None:
@@ -192,16 +194,12 @@ class MiraBoxDockDevice:
         await self.clear_key(target=control.display.id)
         await self.refresh()
 
-    async def set_key_image(
-        self, key: str | int, image: bytes, x: int = 0, y: int = 0
-    ) -> None:
+    async def set_key_image(self, key: str | int, image: bytes) -> None:
         """Set a key image.
 
         Args:
             key: Control ID (string) or key ID (int)
             image: Image bytes
-            x: X offset (default: 0)
-            y: Y offset (default: 0)
         """
         key_str = str(key)
         logger.debug(f"Setting key image for key: {key_str}")
@@ -213,7 +211,7 @@ class MiraBoxDockDevice:
             logger.error(f"Control {control.name} does not have a display")
             return
         payloads = self.protocol.encode_command(
-            "set_key_image", key=control.display.id, image=image, x=x, y=y
+            "set_key_image", key=control.display.id, image=image
         )
         try:
             await self.send_payloads(payloads)
@@ -315,7 +313,7 @@ async def launch_device(path: str, *, teardown_control: dict[str, bool] | None =
         layout = Layout.model_validate(layout)
         logger.info(f"Using layout {layout.name} for device {path}")
 
-        protocol = MiraBoxProtocol()
+        protocol = MiraBoxProtocol(protocol_version=layout.protocol_version)
         device = MiraBoxDockDevice(
             transport=transport, protocol=protocol, layout=layout
         )
@@ -333,12 +331,15 @@ async def launch_device(path: str, *, teardown_control: dict[str, bool] | None =
             # session blanks keys drawn by the primary. Discovery sets suppress_clear.
             if teardown_control is not None and teardown_control.get("suppress_clear"):
                 logger.debug(
-                    "Closing HID path without clear_key/refresh (duplicate interface)"
+                    "Closing HID path without teardown sequence (duplicate interface)"
                 )
             else:
                 logger.info("Stopping device")
-                await device.clear_key()
-                await device.refresh()
+                await run_command_sequence(
+                    transport,
+                    protocol,
+                    layout.teardown_sequence,
+                )
 
     logger.info("Device terminated")
 
@@ -346,7 +347,15 @@ async def launch_device(path: str, *, teardown_control: dict[str, bool] | None =
 async def initialize_device(
     transport: AsyncHidTransport, protocol: DeviceProtocol, layout: Layout
 ):
-    for command in layout.init_sequence:
+    await run_command_sequence(transport, protocol, layout.init_sequence)
+
+
+async def run_command_sequence(
+    transport: AsyncHidTransport,
+    protocol: DeviceProtocol,
+    commands: Sequence[InitCommand],
+):
+    for command in commands:
         payloads = protocol.encode_command(command.cmd, **command.args)
         await transport.write_chunks(payloads)
         await anyio.sleep(0.1)

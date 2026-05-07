@@ -1,10 +1,8 @@
-# Mars Gaming MSD-TWO.
-# path=b'DevSrvsID:4294989654' | vendor_id=2816 | product_id=4097 | serial_number=0300D0785616 | release_number=2 | manufacturer_string=HOTSPOTEKUSB | product_string=HOTSPOTEKUSB HID DEMO | usage_page=65440 | usage=2 | interface_number=0 | bus_type=1
-# Version: V25.MSD_TWO.01.005
-name: "MSD_TWO"
+# AKP03/N3 protocol-v2 form factor: 3x3 keys + 3 dials + 3 buttons.
+name: "AKP03_PROTOCOL_V2"
 
-candidate: usage_page == 65440 or (vendor_id == 2816 and product_id == 4097) or (vendor_id == 21832 and product_id == 4097)
-match: search("V25\\.MSD_TWO|MSD_TWO", firmware)
+candidate: (vendor_id == 768 and (product_id == 4097 or product_id == 4098 or product_id == 4099)) or (vendor_id == 26114 and product_id == 4098)
+match: (vendor_id == 768 and (product_id == 4097 or product_id == 4098 or product_id == 4099)) or (vendor_id == 26114 and product_id == 4098) or search("V2\\.(AKP03|293N3|N3)|AKP03|293N3", firmware)
 protocol_version: 2
 init_sequence:
   - cmd: wake_display
@@ -19,23 +17,19 @@ teardown_sequence:
 
 image_config:
   key: &key_image_format
-    width: 64
-    height: 64
+    width: 60
+    height: 60
     format: "JPEG"
-    rotation: 270
 
   screen: &screen_image_format
     width: 800
     height: 480
     format: "JPEG"
-    rotation: 270
 
 controls:
 
   - name: "0,0"
     type: "key"
-    row: 0
-    column: 0
     events:
       key: 1
     display:
@@ -44,8 +38,6 @@ controls:
   
   - name: "1,0"
     type: "key"
-    row: 0
-    column: 1
     events:
       key: 2
     display:
@@ -54,8 +46,6 @@ controls:
 
   - name: "2,0"
     type: "key"
-    row: 0
-    column: 2
     events:
       key: 3
     display:
@@ -64,8 +54,6 @@ controls:
 
   - name: "0,1"
     type: "key"
-    row: 1
-    column: 0
     events:
       key: 4
     display:
@@ -74,8 +62,6 @@ controls:
 
   - name: "1,1"
     type: "key"
-    row: 1
-    column: 1
     events:
       key: 5
     display:
@@ -84,8 +70,6 @@ controls:
 
   - name: "2,1"
     type: "key"
-    row: 1
-    column: 2
     events:
       key: 6
     display:
@@ -94,8 +78,6 @@ controls:
 
   - name: "3,0"
     type: "dial"
-    row: 0
-    column: 3
     events:
       clockwise: 81
       counterclockwise: 80
@@ -103,8 +85,6 @@ controls:
 
   - name: "3,1"
     type: "dial"
-    row: 1
-    column: 3
     events:
       clockwise: 145
       counterclockwise: 144
@@ -112,8 +92,6 @@ controls:
 
   - name: "4,1"
     type: "dial"
-    row: 1
-    column: 4
     events:
       clockwise: 97
       counterclockwise: 96
@@ -121,21 +99,15 @@ controls:
 
   - name: "B1"
     type: "button"
-    row: 2
-    column: 0
     events:
       key: 37
 
   - name: "B2"
     type: "button"
-    row: 2
-    column: 1
     events:
       key: 48
 
   - name: "B3"
     type: "button"
-    row: 2
-    column: 2
     events:
       key: 49

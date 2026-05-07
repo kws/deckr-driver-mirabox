@@ -92,7 +92,7 @@ class DeviceSession:
         self._device = unique[0]
         self._transport = BlockingHidTransport(self._device["path"])
         self._transport.open()
-        self._protocol = MiraBoxProtocol()
+        self._protocol = MiraBoxProtocol(protocol_version=3)
 
         report = self._transport.get_input_report(0)
         self._firmware_version = report[1:-1].decode("ascii", errors="replace")
@@ -114,7 +114,7 @@ class DeviceSession:
     def send_control_image(self, key_id: int, jpeg_bytes: bytes) -> None:
         """Send JPEG image to the given protocol key control."""
         cmds = self._protocol.encode_command(
-            "set_key_image", key=key_id, image=jpeg_bytes, x=0, y=0
+            "set_key_image", key=key_id, image=jpeg_bytes
         )
         self._write(cmds)
 

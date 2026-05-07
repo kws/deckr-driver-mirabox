@@ -1,16 +1,20 @@
-# N3 form factor: 3x3 keys + 3 dials + 3 buttons (opendeck-akp03: N3, MSDTWO, TreasLin, etc.)
+# N3 form factor: 3x3 keys + 3 dials + 3 buttons.
 # path=b'DevSrvsID:4295019006' | vendor_id=2816 | product_id=4097 | serial_number=6D640519374D | release_number=768 | manufacturer_string=HANVON UGEE | product_string=CS06 for signing | usage_page=65440 | usage=2 | interface_number=0 | bus_type=1
 # V2.293N3.03.001
 name: "293N3"
 
 candidate: usage_page == 65440 or (vendor_id == 2816 and product_id == 4097) or (vendor_id == 26114 and product_id == 4098) or (vendor_id == 21832 and product_id == 4097)
 match: search("V2\\.293N3|293N3", firmware)
+protocol_version: 2
 init_sequence:
   - cmd: wake_display
   - cmd: clear_key
   - cmd: set_brightness
     args:
       value: 100
+  - cmd: refresh
+teardown_sequence:
+  - cmd: clear_key
   - cmd: refresh
 
 image_config:

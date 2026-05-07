@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 class InteractionEvent:
     button_id: int
     payload: int
+    supports_release: bool = True
 
 
 @runtime_checkable
@@ -32,7 +33,7 @@ class MiraBoxProtocol:
 
     This protocol uses:
     - Report ID: 0x00
-    - Packet size: 1024 bytes
+    - Packet size: 512 bytes for protocol v1, 1024 bytes for v2/v3
     - Command prefix: "CRT" + 2 null bytes
     - Event parsing: button_id at bytes 8:10, payload at byte 10
     """
@@ -40,13 +41,16 @@ class MiraBoxProtocol:
     def __init__(
         self,
         *,
+        protocol_version: int,
         report_id: int = 0x00,
-        packet_size: int = 1024,
         read_size: int = 64,
         cmd_prefix: bytes = CMD_PREFIX,
     ):
+        if protocol_version < 1 or protocol_version > 3:
+            raise ValueError("MiraBox protocol_version must be 1, 2, or 3")
         self._report_id = report_id
-        self._packet_size = packet_size
+        self._protocol_version = protocol_version
+        self._packet_size = 1024 if protocol_version >= 2 else 512
         self._read_size = read_size
         self._cmd_prefix = cmd_prefix
 
@@ -54,9 +58,31 @@ class MiraBoxProtocol:
     def read_size(self) -> int:
         return self._read_size
 
+    @property
+    def packet_size(self) -> int:
+        return self._packet_size
+
+    @property
+    def protocol_version(self) -> int:
+        return self._protocol_version
+
+    @property
+    def supports_release_events(self) -> bool:
+        return self._protocol_version >= 3
+
     def _crt(self, command: str) -> bytes:
         """Create a CRT-prefixed command."""
         return self._cmd_prefix + command.encode()
+
+    def _byte_arg(self, name: str, value: int) -> int:
+        if value < 0 or value > 0xFF:
+            raise ValueError(f"{name} must fit in one byte")
+        return value
+
+    def _percent_arg(self, name: str, value: int) -> int:
+        if value < 0 or value > 100:
+            raise ValueError(f"{name} must be a 0-100 percent value")
+        return value
 
     def _to_report_chunks(self, data: bytes) -> list[bytes]:
         report_prefix = bytes([self._report_id])
@@ -87,8 +113,12 @@ class MiraBoxProtocol:
         - "clear_key": Clear a key or all keys (CLE + target)
         - "refresh": Refresh the screen (STP)
         - "connect": Connect to the screen (CONNECT)
-        - "set_brightness": Set brightness (LIG + value)
-        - "set_key_image": Set key image (BAT + len + key + x + y)
+        - "set_brightness": Set display brightness percent (LIG + value)
+        - "set_mode": Set device mode (MOD + ASCII digit)
+        - "set_led_brightness": Set LED brightness percent (LBLIG + value)
+        - "set_led_colors": Set LED RGB colors (SETLB + RGB triples)
+        - "shutdown_clear": Clear display before shutdown (CLE + DC)
+        - "set_key_image": Set key image (BAT + len_hi + len_lo + display id)
         - "set_logo": Set logo (LOG + len)
         - "set_background_image": Set background (BGPIC + len + x + y + width + height + frame_buffer)
         """
@@ -110,20 +140,41 @@ class MiraBoxProtocol:
             return self._to_report_chunks(self._crt("CONNECT"))
 
         elif command == "set_brightness":
-            value = kwargs.get("value", 0xFF)
+            value = self._percent_arg("value", kwargs.get("value", 100))
             return self._to_report_chunks(self._crt("LIG") + value.to_bytes(3, "big"))
+
+        elif command == "set_mode":
+            mode = self._byte_arg("mode", kwargs["mode"])
+            if mode > 9:
+                raise ValueError("mode must be 0-9")
+            return self._to_report_chunks(self._crt("MOD") + b"\x00\x00" + bytes([0x30 + mode]))
+
+        elif command == "set_led_brightness":
+            value = self._percent_arg("value", kwargs.get("value", 100))
+            return self._to_report_chunks(self._crt("LBLIG") + bytes([value]))
+
+        elif command == "set_led_colors":
+            colors = kwargs["colors"]
+            color_bytes = bytearray()
+            for index, color in enumerate(colors):
+                if len(color) != 3:
+                    raise ValueError(f"colors[{index}] must contain red, green, and blue")
+                color_bytes.extend(self._byte_arg("color component", int(component)) for component in color)
+            return self._to_report_chunks(self._crt("SETLB") + bytes(color_bytes))
+
+        elif command == "shutdown_clear":
+            return self._to_report_chunks(self._crt("CLE") + b"\x00\x00DC")
 
         elif command == "set_key_image":
             key = kwargs["key"]
             image = kwargs["image"]
-            x = kwargs.get("x", 0)
-            y = kwargs.get("y", 0)
+            if len(image) > 0xFFFF:
+                raise ValueError("set_key_image image payload must be at most 65535 bytes")
             cmd = (
                 self._crt("BAT")
-                + len(image).to_bytes(4, "big")
-                + key.to_bytes(1, "big")
-                + x.to_bytes(2, "big")
-                + y.to_bytes(2, "big")
+                + b"\x00\x00"
+                + len(image).to_bytes(2, "big")
+                + self._byte_arg("key", key).to_bytes(1, "big")
             )
             return self._to_report_chunks(cmd) + self._to_report_chunks(image)
 
@@ -171,9 +222,13 @@ class MiraBoxProtocol:
             return None
 
         button_id = int.from_bytes(report[8:10], byteorder="big", signed=False)
-        payload = report[10]
+        payload = report[10] if self.supports_release_events else 1
 
-        event = InteractionEvent(button_id=button_id, payload=payload)
+        event = InteractionEvent(
+            button_id=button_id,
+            payload=payload,
+            supports_release=self.supports_release_events,
+        )
 
         logger.debug("MiraBox parse_event: %s", event)
         return event

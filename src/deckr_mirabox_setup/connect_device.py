@@ -111,7 +111,7 @@ def main():
         for chunk in chunks:
             transport.write(chunk)
 
-    protocol = MiraBoxProtocol()
+    protocol = MiraBoxProtocol(protocol_version=3)
 
     write(protocol.encode_command("wake_display"))
     write(protocol.encode_command("clear_key", target=0xFF))
@@ -126,7 +126,7 @@ def main():
             size=my_size, text=my_size, svg=ARROW_SVG.encode("ascii")
         )
         cmds = protocol.encode_command(
-            "set_key_image", key=key + start_offset, image=jpeg_bytes, x=0, y=0
+            "set_key_image", key=key + start_offset, image=jpeg_bytes
         )
         write(cmds)
 
