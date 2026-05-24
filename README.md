@@ -15,6 +15,17 @@ The Python manager participates as `hardware_manager:<manager-id>` on the
 `hardware_messages` lane. The manager id comes from the generic component
 instance's `endpoints.hardware_manager` value.
 
+Beacon and Concord are the runtime ownership surface. The manager advertises
+current devices through the `dev.deckr.hardware` Beacon feature and accepts
+controller ownership by attaching its participant token to matching
+`dev.deckr.profile.hardware_claim.v1` Concord contracts. The shared
+`deckr.hardware.runtime.HardwareManagerRuntime` implementation owns that
+protocol flow; this package owns HID discovery, layout evaluation, command
+execution, and device reset.
+
+The old discovery inventory, endpoint-presence, and unilateral device-claim
+current-state records are not emitted or consumed.
+
 Set the hardware manager endpoint id explicitly when the manager identity is
 part of deployment policy, such as room-pinned controller device config:
 

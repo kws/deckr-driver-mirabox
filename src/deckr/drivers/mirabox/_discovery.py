@@ -7,7 +7,7 @@ from typing import Any
 
 import anyio
 import hid
-from deckr.contracts.messages import DeckrMessage, EndpointTarget
+from deckr.contracts.messages import DeckrMessage
 from deckr.hardware import messages as hw_messages
 from deckr.hardware.capabilities import (
     RasterBitmapClearParams,
@@ -15,7 +15,6 @@ from deckr.hardware.capabilities import (
     device_power_command_params,
     raster_bitmap_command_params,
 )
-from deckr.lanes import RegisteredEndpointLane
 from pydantic import ValidationError
 
 from deckr.drivers.mirabox._device import launch_device
@@ -49,9 +48,9 @@ def _hid_interface_sort_key(d: dict[str, Any]) -> tuple[Any, Any]:
 
 @asynccontextmanager
 async def discover_mirabox_devices(
-    endpoint: RegisteredEndpointLane,
     *,
     manager_id: str,
+    sender_session_id: str,
     command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]] | None = None,
 ):
     """
@@ -80,8 +79,8 @@ async def discover_mirabox_devices(
             launcher_loop,
             discovery_receive,
             send_stream,
-            endpoint,
             manager_id,
+            sender_session_id,
             command_streams,
         )
         yield receive_stream
@@ -120,19 +119,13 @@ async def discover_loop(send_stream: anyio.abc.ByteStream):
 async def launcher_loop(
     receive_stream: anyio.abc.ByteStream,
     send_stream: anyio.abc.ObjectSendStream[Any],
-    endpoint: RegisteredEndpointLane,
     manager_id: str,
+    sender_session_id: str,
     command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
 ):
     connected_device_ids: set[str] = set()
 
     async with anyio.create_task_group() as tg:
-        tg.start_soon(
-            _manager_command_subscription,
-            endpoint,
-            manager_id,
-            command_streams,
-        )
         async for device in receive_stream:
             tg.start_soon(
                 device_loop,
@@ -140,7 +133,7 @@ async def launcher_loop(
                 send_stream,
                 connected_device_ids,
                 manager_id,
-                endpoint.session_id,
+                sender_session_id,
                 command_streams,
             )
 
@@ -304,36 +297,3 @@ async def _apply_device_commands(
                 logger.warning("Ignoring invalid raster image payload: %s", exc)
         elif isinstance(params, RasterBitmapClearParams):
             await device.clear_raster(message.control_id)
-
-
-async def _manager_command_subscription(
-    endpoint: RegisteredEndpointLane,
-    manager_id: str,
-    command_streams: dict[str, anyio.abc.ObjectSendStream[DeviceCommand]],
-) -> None:
-    async with endpoint.subscribe() as stream:
-        async for envelope in stream:
-            if (
-                not isinstance(envelope.recipient, EndpointTarget)
-                or envelope.recipient.endpoint != endpoint.endpoint
-            ):
-                continue
-            ref = hw_messages.hardware_device_ref_from_message(envelope)
-            if ref is None or ref.manager_id != manager_id:
-                continue
-            message = hw_messages.hardware_body_from_message(envelope)
-            if not isinstance(
-                message,
-                hw_messages.ControlCommandMessage
-                | hw_messages.CapabilityStateRequestMessage,
-            ):
-                continue
-            command_stream = command_streams.get(ref.device_id)
-            if command_stream is None:
-                logger.debug(
-                    "Dropping command for unknown MiraBox device %s/%s",
-                    ref.manager_id,
-                    ref.device_id,
-                )
-                continue
-            await command_stream.send(envelope)
