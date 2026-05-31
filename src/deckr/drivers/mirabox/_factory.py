@@ -35,6 +35,9 @@ from deckr.lanes import Lane, RegisteredEndpointLane
 
 from deckr.drivers.mirabox._discovery import (
     DeviceCommand,
+    DeviceConnected,
+    DeviceDisconnected,
+    DeviceDiscoveryEvent,
     ResetDeviceCommand,
     discover_mirabox_devices,
 )
@@ -158,13 +161,18 @@ class MiraboxDeviceFactory(BaseComponent):
             sender_session_id=self._endpoint.session_id,
             command_streams=self._command_streams,
         ) as stream:
-            async for message in stream:
-                await self._handle_device_message(message)
+            async for event in stream:
+                await self._handle_device_event(event)
 
-    async def _handle_device_message(self, message: DeckrMessage) -> None:
+    async def _handle_device_event(self, event: DeviceDiscoveryEvent) -> None:
         if self._runtime is None:
             return
-        await self._runtime.handle_hardware_message(message)
+        if isinstance(event, DeviceConnected):
+            await self._runtime.set_device(event.descriptor)
+        elif isinstance(event, DeviceDisconnected):
+            await self._runtime.remove_device(event.device_id, reason=event.reason)
+        else:
+            await self._runtime.handle_hardware_message(event)
 
     async def _send_device_command(self, envelope: DeckrMessage) -> bool | None:
         ref = hw_messages.hardware_device_ref_from_message(envelope)
