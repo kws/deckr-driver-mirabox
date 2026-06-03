@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 import anyio
 import deckr.hardware.messages as hw_messages
 import pytest
-from deckr.beacon import (
-    DEFAULT_BEACON_ADVERTISEMENT_STORE_NAME,
-    BeaconDiscovery,
-    BeaconService,
+from deckr.components import (
+    ComponentState,
+    resolve_component_host_plan,
+    start_components,
 )
-from deckr.components import RunContext
-from deckr.concord import (
-    DEFAULT_CONCORD_CONTRACT_STORE_NAME,
-    DEFAULT_CONCORD_TOKEN_STORE_NAME,
-    ConcordCoordinator,
-    ConcordService,
-    ContractValidityStatus,
-)
-from deckr.contracts.lanes import CORE_LANE_CONTRACTS, LaneContractRegistry
+from deckr.concord import ContractValidityStatus
 from deckr.contracts.messages import controller_address, hardware_manager_address
+from deckr.core.config import ConfigDocument
 from deckr.hardware import (
     HARDWARE_CLAIM_PROFILE_ID,
     HARDWARE_FEATURE_ID,
@@ -31,8 +26,7 @@ from deckr.hardware import (
     HardwareClaimDevice,
     HardwareClaimTerms,
 )
-from deckr.runtime import Deckr
-from memory_lane_substrate import MemoryLaneSubstrate
+from message_bus_mocks import mock_deckr
 
 from deckr.drivers.mirabox import _factory as factory_module
 from deckr.drivers.mirabox._discovery import DeviceConnected, ResetDeviceCommand
@@ -40,26 +34,27 @@ from deckr.drivers.mirabox._discovery import DeviceConnected, ResetDeviceCommand
 pytestmark = pytest.mark.asyncio
 
 
-def _deckr() -> Deckr:
-    registry = LaneContractRegistry(CORE_LANE_CONTRACTS.values())
-    return Deckr(
-        lane_contracts=registry,
-        substrate=MemoryLaneSubstrate(lane_contracts=registry),
-    )
-
-
-def _beacon(deckr: Deckr) -> BeaconService:
-    return BeaconService(
-        BeaconDiscovery(deckr.state(DEFAULT_BEACON_ADVERTISEMENT_STORE_NAME))
-    )
-
-
-def _concord(deckr: Deckr) -> ConcordService:
-    return ConcordService(
-        ConcordCoordinator(
-            deckr.state(DEFAULT_CONCORD_CONTRACT_STORE_NAME),
-            deckr.state(DEFAULT_CONCORD_TOKEN_STORE_NAME),
-        )
+def _document(*, labels: dict[str, str] | None = None) -> ConfigDocument:
+    config: dict[str, Any] = {}
+    if labels is not None:
+        config["labels"] = labels
+    return ConfigDocument(
+        raw={
+            "deckr": {
+                "components": {
+                    "instances": {
+                        "mirabox": {
+                            "component": "dev.deckr.hardware.mirabox",
+                            "instance_id": "main",
+                            "endpoints": {"hardware_manager": "mirabox-main"},
+                            "config": config,
+                        }
+                    }
+                }
+            }
+        },
+        source_path=None,
+        base_dir=Path.cwd(),
     )
 
 
@@ -90,7 +85,7 @@ def _device() -> DeviceDescriptor:
 class FakeDiscovery:
     def __init__(self) -> None:
         self.send, self.receive = anyio.create_memory_object_stream(20)
-        self.kwargs = {}
+        self.kwargs: dict[str, object] = {}
 
     @asynccontextmanager
     async def __call__(self, **kwargs):
@@ -99,12 +94,45 @@ class FakeDiscovery:
             yield self.receive
 
 
-async def _claim(factory, concord: ConcordService, controller_endpoint):
+@asynccontextmanager
+async def _running_component(monkeypatch, *, labels: dict[str, str] | None = None):
+    fake_discovery = FakeDiscovery()
+    monkeypatch.setattr(factory_module, "discover_mirabox_devices", fake_discovery)
+    plan = resolve_component_host_plan(
+        _document(labels=labels),
+        definitions={"dev.deckr.hardware.mirabox": factory_module.component},
+    )
+    deckr_cm = mock_deckr(
+        lane_contracts=plan.lane_contracts,
+        lanes=plan.lane_names,
+    )
+    deckr = await deckr_cm.__aenter__()
+    component_cm = start_components(deckr, plan)
+    component_host = await component_cm.__aenter__()
+    factory = component_host.components[0]
+    try:
+        await component_host.component_manager.wait_for_state(
+            "dev.deckr.hardware.mirabox:main",
+            ComponentState.RUNNING,
+        )
+        with anyio.fail_after(1):
+            while factory._runtime is None:
+                await anyio.sleep(0.01)
+        with anyio.fail_after(1):
+            while "manager_id" not in fake_discovery.kwargs:
+                await anyio.sleep(0.01)
+        yield deckr, component_host, factory, fake_discovery
+    finally:
+        await component_cm.__aexit__(None, None, None)
+        await deckr_cm.__aexit__(None, None, None)
+
+
+async def _claim(factory, concord, controller_endpoint):
     runtime = factory._runtime
     assert runtime is not None
     terms = HardwareClaimTerms(
         claimId="claim-1",
-        controllerEndpoint=controller_endpoint.endpoint,
+        controllerEndpoint=controller_endpoint.address,
         managerEndpoint=hardware_manager_address("mirabox-main"),
         devices=(
             HardwareClaimDevice(
@@ -118,112 +146,98 @@ async def _claim(factory, concord: ConcordService, controller_endpoint):
         ),
     )
     contract = await concord._create_contract(
-        (controller_endpoint.endpoint, hardware_manager_address("mirabox-main")),
+        (controller_endpoint.address, hardware_manager_address("mirabox-main")),
         contract_id="claim-1",
         profile=HARDWARE_CLAIM_PROFILE_ID,
         terms=terms,
-        created_by=controller_endpoint.endpoint,
+        created_by=controller_endpoint.address,
     )
     await concord._attach(
         contract,
-        controller_endpoint.endpoint,
+        controller_endpoint.address,
         controller_endpoint.session_id,
     )
+    await concord.wait_current()
     await runtime.reconcile_claims(reason="test")
     return contract
 
 
 async def test_mirabox_advertises_hardware_and_routes_claimed_input(monkeypatch):
-    fake_discovery = FakeDiscovery()
-    monkeypatch.setattr(factory_module, "discover_mirabox_devices", fake_discovery)
-    deckr = _deckr()
-    factory = factory_module.driver_factory(
-        deckr.lane("hardware_messages"),
-        _beacon(deckr),
-        _concord(deckr),
-        manager_id="mirabox-main",
+    async with _running_component(
+        monkeypatch,
         labels={"room": "office"},
-    )
-    controller_cm = deckr.lane("hardware_messages").register_endpoint(
-        controller_address("controller-main")
-    )
-    controller_endpoint = await controller_cm.__aenter__()
-    try:
-        async with anyio.create_task_group() as tg:
-            await factory.start(RunContext(tg=tg, stopping=anyio.Event()))
-            runtime = factory._runtime
-            assert runtime is not None
-            await fake_discovery.send.send(DeviceConnected(_device()))
-            with anyio.fail_after(1):
-                while "deck" not in runtime.devices:
-                    await anyio.sleep(0.01)
+    ) as (deckr, _host, factory, fake_discovery):
+        runtime = factory._runtime
+        assert runtime is not None
+        assert fake_discovery.kwargs["manager_id"] == "mirabox-main"
+        assert fake_discovery.kwargs["sender_session_id"] == runtime.endpoint.session_id
 
-            candidates = await _beacon(deckr).find(HARDWARE_FEATURE_ID)
-            payload = HardwareBeaconPayload.model_validate(
-                candidates[0].advertisement.payload
-            )
-            assert payload.labels == {"room": "office"}
-            assert payload.devices["deck"].descriptor == _device()
+        await fake_discovery.send.send(DeviceConnected(_device()))
+        with anyio.fail_after(1):
+            while "deck" not in runtime.devices:
+                await anyio.sleep(0.01)
 
-            contract = await _claim(factory, _concord(deckr), controller_endpoint)
-            assert (await _concord(deckr)._validate(contract)).status == (
+        await deckr.beacon.wait_current()
+        candidates = deckr.beacon.candidates(HARDWARE_FEATURE_ID)
+        payload = HardwareBeaconPayload.model_validate(
+            candidates[0].advertisement.payload
+        )
+        assert payload.labels == {"room": "office"}
+        assert payload.devices["deck"].descriptor == _device()
+
+        async with deckr.endpoint(controller_address("controller-main")) as controller:
+            contract = await _claim(factory, deckr.concord, controller)
+            assert (await deckr.concord._validate(contract)).status == (
                 ContractValidityStatus.VALID
             )
 
-            async with controller_endpoint.subscribe() as stream:
-                await fake_discovery.send.send(
-                    hw_messages.control_input_message(
-                        manager_id="mirabox-main",
-                        sender_session_id=runtime.endpoint.session_id,
-                        device_id="deck",
-                        fingerprint="serial-a",
-                        control_id="0,0",
-                        capability_id="raster.bitmap",
-                        event_type="press",
-                        value={"eventType": "press"},
-                    )
+            deckr._message_bus.publish.reset_mock()
+            await fake_discovery.send.send(
+                hw_messages.control_input_message(
+                    manager_id="mirabox-main",
+                    sender_session_id=runtime.endpoint.session_id,
+                    device_id="deck",
+                    fingerprint="serial-a",
+                    control_id="0,0",
+                    capability_id="raster.bitmap",
+                    event_type="press",
+                    value={"eventType": "press"},
                 )
-                with anyio.fail_after(1):
-                    routed = await stream.receive()
-            assert routed.recipient.endpoint == controller_endpoint.endpoint
-            assert routed.recipient_session_id == controller_endpoint.session_id
-            await factory.stop()
-            tg.cancel_scope.cancel()
-    finally:
-        await controller_cm.__aexit__(None, None, None)
+            )
+            with anyio.fail_after(1):
+                while not deckr._message_bus.publish.called:
+                    await anyio.sleep(0.01)
+            routed = deckr._message_bus.publish.call_args.args[0]
+            assert routed.recipient.endpoint == controller.address
+            assert routed.recipient_session_id == controller.session_id
 
 
 async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
-    fake_discovery = FakeDiscovery()
-    monkeypatch.setattr(factory_module, "discover_mirabox_devices", fake_discovery)
-    deckr = _deckr()
-    concord = _concord(deckr)
-    factory = factory_module.driver_factory(
-        deckr.lane("hardware_messages"),
-        _beacon(deckr),
-        concord,
-        manager_id="mirabox-main",
-    )
-    controller_cm = deckr.lane("hardware_messages").register_endpoint(
-        controller_address("controller-main")
-    )
-    controller_endpoint = await controller_cm.__aenter__()
-    command_send, command_receive = anyio.create_memory_object_stream(10)
-    try:
-        async with anyio.create_task_group() as tg:
-            await factory.start(RunContext(tg=tg, stopping=anyio.Event()))
-            runtime = factory._runtime
-            assert runtime is not None
-            await fake_discovery.send.send(DeviceConnected(_device()))
-            with anyio.fail_after(1):
-                while "deck" not in runtime.devices:
-                    await anyio.sleep(0.01)
+    async with _running_component(monkeypatch) as (
+        deckr,
+        _host,
+        factory,
+        fake_discovery,
+    ):
+        runtime = factory._runtime
+        assert runtime is not None
+        await fake_discovery.send.send(DeviceConnected(_device()))
+        with anyio.fail_after(1):
+            while "deck" not in runtime.devices:
+                await anyio.sleep(0.01)
+
+        command_send, command_receive = anyio.create_memory_object_stream(10)
+        async with (
+            command_send,
+            command_receive,
+            deckr.endpoint(controller_address("controller-main")) as controller,
+        ):
             factory._command_streams["deck"] = command_send
-            contract = await _claim(factory, concord, controller_endpoint)
+            contract = await _claim(factory, deckr.concord, controller)
 
             command = hw_messages.control_command_message(
                 controller_id="controller-main",
-                sender_session_id=controller_endpoint.session_id,
+                sender_session_id=controller.session_id,
                 manager_id="mirabox-main",
                 device_id="deck",
                 control_id="0,0",
@@ -234,14 +248,8 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
             with anyio.fail_after(1):
                 assert await command_receive.receive() == command
 
-            await concord._cancel(contract, controller_endpoint.endpoint, reason="test")
+            await deckr.concord._cancel(contract, controller.address, reason="test")
+            await deckr.concord.wait_current()
             await runtime.reconcile_claims(reason="test cancel")
             with anyio.fail_after(1):
                 assert isinstance(await command_receive.receive(), ResetDeviceCommand)
-
-            await factory.stop()
-            tg.cancel_scope.cancel()
-    finally:
-        await command_send.aclose()
-        await command_receive.aclose()
-        await controller_cm.__aexit__(None, None, None)
