@@ -158,8 +158,22 @@ async def _claim(factory, concord, controller_endpoint):
         controller_endpoint.session_id,
     )
     await concord.wait_current()
-    await runtime.reconcile_claims(reason="test")
+    await runtime._reconcile_claims(reason="test")
     return contract
+
+
+async def _wait_for_hardware_payload(deckr) -> HardwareBeaconPayload:
+    with anyio.fail_after(1):
+        while True:
+            await deckr.beacon.wait_current()
+            candidates = deckr.beacon.candidates(HARDWARE_FEATURE_ID)
+            if candidates:
+                payload = HardwareBeaconPayload.model_validate(
+                    candidates[0].advertisement.payload
+                )
+                if set(payload.devices) == {"deck"}:
+                    return payload
+            await anyio.sleep(0.01)
 
 
 async def test_mirabox_advertises_hardware_and_routes_claimed_input(monkeypatch):
@@ -173,15 +187,7 @@ async def test_mirabox_advertises_hardware_and_routes_claimed_input(monkeypatch)
         assert fake_discovery.kwargs["sender_session_id"] == runtime.endpoint.session_id
 
         await fake_discovery.send.send(DeviceConnected(_device()))
-        with anyio.fail_after(1):
-            while "deck" not in runtime.devices:
-                await anyio.sleep(0.01)
-
-        await deckr.beacon.wait_current()
-        candidates = deckr.beacon.candidates(HARDWARE_FEATURE_ID)
-        payload = HardwareBeaconPayload.model_validate(
-            candidates[0].advertisement.payload
-        )
+        payload = await _wait_for_hardware_payload(deckr)
         assert payload.labels == {"room": "office"}
         assert payload.devices["deck"].descriptor == _device()
 
@@ -222,9 +228,7 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
         runtime = factory._runtime
         assert runtime is not None
         await fake_discovery.send.send(DeviceConnected(_device()))
-        with anyio.fail_after(1):
-            while "deck" not in runtime.devices:
-                await anyio.sleep(0.01)
+        await _wait_for_hardware_payload(deckr)
 
         command_send, command_receive = anyio.create_memory_object_stream(10)
         async with (
@@ -244,12 +248,12 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
                 capability_id="raster.bitmap",
                 command_type="clear",
             )
-            assert await runtime.handle_command(command)
+            assert await runtime._handle_command(command)
             with anyio.fail_after(1):
                 assert await command_receive.receive() == command
 
             await deckr.concord._cancel(contract, controller.address, reason="test")
             await deckr.concord.wait_current()
-            await runtime.reconcile_claims(reason="test cancel")
+            await runtime._reconcile_claims(reason="test cancel")
             with anyio.fail_after(1):
                 assert isinstance(await command_receive.receive(), ResetDeviceCommand)
