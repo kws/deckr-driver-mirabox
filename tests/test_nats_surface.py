@@ -29,7 +29,11 @@ from deckr.hardware import (
 from message_bus_mocks import mock_deckr
 
 from deckr.drivers.mirabox import _factory as factory_module
-from deckr.drivers.mirabox._discovery import DeviceConnected, ResetDeviceCommand
+from deckr.drivers.mirabox._discovery import (
+    DeviceConnected,
+    DeviceDisconnected,
+    ResetDeviceCommand,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -127,11 +131,11 @@ async def _running_component(monkeypatch, *, labels: dict[str, str] | None = Non
         await deckr_cm.__aexit__(None, None, None)
 
 
-async def _claim(factory, concord, controller_endpoint):
+async def _claim(factory, concord, controller_endpoint, *, contract_id: str = "claim-1"):
     runtime = factory._runtime
     assert runtime is not None
     terms = HardwareClaimTerms(
-        claimId="claim-1",
+        claimId=contract_id,
         controllerEndpoint=controller_endpoint.address,
         managerEndpoint=hardware_manager_address("mirabox-main"),
         devices=(
@@ -147,7 +151,7 @@ async def _claim(factory, concord, controller_endpoint):
     )
     contract = await concord._create_contract(
         (controller_endpoint.address, hardware_manager_address("mirabox-main")),
-        contract_id="claim-1",
+        contract_id=contract_id,
         profile=HARDWARE_CLAIM_PROFILE_ID,
         terms=terms,
         created_by=controller_endpoint.address,
@@ -237,6 +241,24 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
             deckr.endpoint(controller_address("controller-main")) as controller,
         ):
             factory._command_streams["deck"] = command_send
+            unauthorized = hw_messages.control_command_message(
+                controller_id="controller-main",
+                sender_session_id=controller.session_id,
+                manager_id="mirabox-main",
+                device_id="deck",
+                control_id="0,0",
+                capability_id="raster.bitmap",
+                command_type="clear",
+                recipient_session_id=runtime.endpoint.session_id,
+                contract={"contractId": "unauthorized-claim", "generation": 1},
+            )
+            deckr._message_bus.publish_reply.reset_mock()
+            assert not await runtime._handle_command(unauthorized)
+            rejected = deckr._message_bus.publish_reply.call_args.args[0]
+            rejection = hw_messages.hardware_body_from_message(rejected)
+            assert isinstance(rejection, hw_messages.CommandRejectedMessage)
+            assert rejection.reason == "unauthorized"
+
             contract = await _claim(factory, deckr.concord, controller)
 
             command = hw_messages.control_command_message(
@@ -247,6 +269,8 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
                 control_id="0,0",
                 capability_id="raster.bitmap",
                 command_type="clear",
+                recipient_session_id=runtime.endpoint.session_id,
+                contract={"contractId": "claim-1", "generation": 1},
             )
             assert await runtime._handle_command(command)
             with anyio.fail_after(1):
@@ -257,3 +281,20 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
             await runtime._reconcile_claims(reason="test cancel")
             with anyio.fail_after(1):
                 assert isinstance(await command_receive.receive(), ResetDeviceCommand)
+
+            second = await _claim(
+                factory,
+                deckr.concord,
+                controller,
+                contract_id="claim-2",
+            )
+            assert (await deckr.concord._validate(second)).status == (
+                ContractValidityStatus.VALID
+            )
+            await fake_discovery.send.send(DeviceDisconnected("deck", "disconnected"))
+            with anyio.fail_after(1):
+                while (await deckr.concord._validate(second)).status != (
+                    ContractValidityStatus.CANCELLED
+                ):
+                    await anyio.sleep(0.01)
+            assert runtime.live_claims == ()
