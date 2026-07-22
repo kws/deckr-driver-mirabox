@@ -92,36 +92,34 @@ class MiraboxDeviceFactory(BaseComponent):
             metadata={"runtime": "deckr-driver-mirabox-python"},
         ) as endpoint:
             self.manager_id = endpoint.address.endpoint_id
-            runtime = HardwareManagerRuntime(
-                endpoint=endpoint,
-                beacon=self._context.require_beacon(),
-                concord=self._context.require_concord(),
+            manager = self._context.hardware_manager(
+                endpoint,
                 manager_id=self.manager_id,
                 labels=self._labels,
                 command_handler=self._send_device_command,
                 reset_handler=self._reset_device,
             )
-            self._runtime = runtime
-            try:
-                await runtime.start(ctx.tg)
-                ctx.start_task(
-                    self._discovery_loop,
-                    endpoint.session_id,
-                    name=f"{self.name}.discovery",
-                )
-                await ctx.report_status(
-                    ReadinessState.READY,
-                    diagnostics={"manager_id": self.manager_id},
-                )
-                await ctx.stopping.wait()
-            finally:
-                self._command_streams.clear()
-                await self._stop_runtime()
-                await ctx.report_status(
-                    ReadinessState.UNREADY,
-                    reasons=("stopped",),
-                    diagnostics={"manager_id": self.manager_id},
-                )
+            async with manager as runtime:
+                self._runtime = runtime
+                try:
+                    ctx.start_task(
+                        self._discovery_loop,
+                        endpoint.session_id,
+                        name=f"{self.name}.discovery",
+                    )
+                    await ctx.report_status(
+                        ReadinessState.READY,
+                        diagnostics={"manager_id": self.manager_id},
+                    )
+                    await ctx.stopping.wait()
+                finally:
+                    self._command_streams.clear()
+                    self._runtime = None
+                    await ctx.report_status(
+                        ReadinessState.UNREADY,
+                        reasons=("stopped",),
+                        diagnostics={"manager_id": self.manager_id},
+                    )
 
     async def stop(self) -> None:
         stopping = self._stopping
@@ -129,13 +127,6 @@ class MiraboxDeviceFactory(BaseComponent):
             stopping.set()
         with anyio.CancelScope(shield=True):
             self._command_streams.clear()
-            await self._stop_runtime()
-
-    async def _stop_runtime(self) -> None:
-        runtime = self._runtime
-        self._runtime = None
-        if runtime is not None:
-            await runtime.stop()
 
     async def _discovery_loop(self, sender_session_id: str) -> None:
         async with discover_mirabox_devices(
