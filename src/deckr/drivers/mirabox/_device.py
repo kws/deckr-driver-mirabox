@@ -256,6 +256,8 @@ class MiraBoxDockDevice:
         async with self.transport.subscribe() as stream:
             async for report in stream:
                 event = self.protocol.parse_event(report)
+                if event is None:
+                    continue
                 for hw_input in self.layout.to_control_input(event, self):
                     yield hw_input
 

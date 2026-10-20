@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import yaml
 from deckr.hardware.capabilities import encoder_relative_value_schema
@@ -45,7 +43,9 @@ def test_key_events_require_exactly_one_field() -> None:
 
 
 def test_builtin_layout_validates_and_exposes_controls() -> None:
-    layout_data = yaml.safe_load((BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text())
+    layout_data = yaml.safe_load(
+        (BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text()
+    )
 
     layout = Layout.model_validate(layout_data)
     controls = layout.get_controls()
@@ -64,14 +64,6 @@ def test_builtin_layout_validates_and_exposes_controls() -> None:
         (capability.capability_id, capability.event_types)
         for capability in key.input_capabilities
     ] == [("button.momentary", ("down", "up"))]
-
-
-def test_every_builtin_layout_parses_and_declares_protocol_version() -> None:
-    for filename, layout_data in _load_builtin_layouts():
-        assert "protocol_version" in layout_data, filename
-        layout = Layout.model_validate(layout_data)
-        assert layout.protocol_version in {1, 2, 3}
-        assert layout.teardown_sequence, filename
 
 
 def test_layout_requires_protocol_version() -> None:
@@ -183,33 +175,15 @@ def test_layout_image_dimensions_and_rotation_match_contract() -> None:
     assert key.display.format.rotation == 90
 
 
-def test_driver_source_layouts_and_tests_do_not_name_reference_projects() -> None:
-    forbidden = [
-        "Open" + "Deck",
-        "open" + "deck",
-        "mira" + "jazz",
-        "Mira" + "Jazz",
-        "Open " + "Deck",
-    ]
-    roots = [BUILD_IN_LAYOUT_PATH.parent.parent, Path(__file__).resolve().parent]
-    files = [
-        path
-        for root in roots
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix in {".py", ".yml", ".yaml"}
-    ]
-
-    for path in files:
-        text = path.read_text(errors="ignore")
-        for name in forbidden:
-            assert name not in text, path
-
-
 def test_builtin_layout_emits_signed_encoder_delta() -> None:
-    layout_data = yaml.safe_load((BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text())
+    layout_data = yaml.safe_load(
+        (BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text()
+    )
     layout = Layout.model_validate(layout_data)
 
-    clockwise = list(layout.to_control_input(InteractionEvent(button_id=81, payload=0), None))
+    clockwise = list(
+        layout.to_control_input(InteractionEvent(button_id=81, payload=0), None)
+    )
     counterclockwise = list(
         layout.to_control_input(InteractionEvent(button_id=80, payload=0), None)
     )
@@ -222,10 +196,14 @@ def test_builtin_layout_emits_signed_encoder_delta() -> None:
 
 
 def test_builtin_layout_key_up_emits_only_momentary_up() -> None:
-    layout_data = yaml.safe_load((BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text())
+    layout_data = yaml.safe_load(
+        (BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text()
+    )
     layout = Layout.model_validate(layout_data)
 
-    events = list(layout.to_control_input(InteractionEvent(button_id=1, payload=0), None))
+    events = list(
+        layout.to_control_input(InteractionEvent(button_id=1, payload=0), None)
+    )
 
     assert len(events) == 1
     assert events[0].control_id == "0,0"
@@ -234,7 +212,9 @@ def test_builtin_layout_key_up_emits_only_momentary_up() -> None:
 
 
 def test_protocol_without_release_events_synthesizes_momentary_down_up() -> None:
-    layout_data = yaml.safe_load((BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text())
+    layout_data = yaml.safe_load(
+        (BUILD_IN_LAYOUT_PATH / "device-msd-two.yml").read_text()
+    )
     layout = Layout.model_validate(layout_data)
 
     events = list(

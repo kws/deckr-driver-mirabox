@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any
 
@@ -120,7 +121,12 @@ async def _running_component(monkeypatch, *, labels: dict[str, str] | None = Non
     monkeypatch.setattr(factory_module, "discover_mirabox_devices", fake_discovery)
     plan = resolve_component_host_plan(
         _document(labels=labels),
-        definitions={"dev.deckr.hardware.mirabox": factory_module.component},
+        definitions={
+            entry.name: entry.load()
+            for entry in entry_points(
+                group="deckr.components", name="dev.deckr.hardware.mirabox"
+            )
+        },
     )
     deckr_cm = mock_deckr(
         lane_contracts=plan.lane_contracts,
@@ -147,7 +153,9 @@ async def _running_component(monkeypatch, *, labels: dict[str, str] | None = Non
         await deckr_cm.__aexit__(None, None, None)
 
 
-async def _claim(factory, concord, controller_endpoint, *, contract_id: str = "claim-1"):
+async def _claim(
+    factory, concord, controller_endpoint, *, contract_id: str = "claim-1"
+):
     runtime = factory._runtime
     assert runtime is not None
     terms = HardwareClaimTerms(
@@ -183,12 +191,9 @@ async def _claim(factory, concord, controller_endpoint, *, contract_id: str = "c
     await runtime._claim_manager.notify_policy_changed()
     with anyio.fail_after(2):
         while (
-            (await concord._validate(contract)).status
-            != ContractValidityStatus.VALID
-            or not any(
-                claim.contract.pointer == contract.pointer
-                for claim in runtime.live_claims
-            )
+            await concord._validate(contract)
+        ).status != ContractValidityStatus.VALID or not any(
+            claim.contract.pointer == contract.pointer for claim in runtime.live_claims
         ):
             await anyio.sleep(0)
     return contract
@@ -248,6 +253,19 @@ async def test_mirabox_advertises_hardware_and_routes_claimed_input(monkeypatch)
             routed = deckr._message_bus.publish.call_args.args[0]
             assert routed.recipient.endpoint == controller.address
             assert routed.recipient_session_id == controller.session_id
+            body = hw_messages.hardware_body_from_message(routed)
+            assert isinstance(body, hw_messages.ControlInputMessage)
+            assert (
+                body.control_id,
+                body.capability_id,
+                body.event_type,
+                body.value,
+            ) == (
+                "0,0",
+                "button.press",
+                "press",
+                {"eventType": "press"},
+            )
 
 
 async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
@@ -309,6 +327,16 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
             await runtime._reconcile_claims(reason="test cancel")
             with anyio.fail_after(1):
                 assert isinstance(await command_receive.receive(), ResetDeviceCommand)
+
+            # Replaying the old command must not write to the device after reset.
+            assert not await runtime._handle_command(command)
+            rejected = deckr._message_bus.publish_reply.call_args.args[0]
+            assert (
+                hw_messages.hardware_body_from_message(rejected).reason
+                == "unauthorized"
+            )
+            with pytest.raises(anyio.WouldBlock):
+                command_receive.receive_nowait()
 
             second = await _claim(
                 factory,

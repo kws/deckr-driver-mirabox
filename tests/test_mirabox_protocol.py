@@ -1,33 +1,24 @@
 from __future__ import annotations
 
+import pytest
+
 from deckr.drivers.mirabox._protocol import MiraBoxProtocol
 
 
-def test_protocol_v1_uses_512_byte_hid_reports() -> None:
-    protocol = MiraBoxProtocol(protocol_version=1)
+@pytest.mark.parametrize(("version", "report_size"), [(1, 513), (2, 1025), (3, 1025)])
+def test_image_reports_preserve_payload_across_packet_boundaries(version, report_size):
+    protocol = MiraBoxProtocol(protocol_version=version)
+    image = bytes(range(256)) * 5
+    payloads = protocol.encode_command("set_key_image", key=7, image=image)
 
-    payloads = protocol.encode_command("set_key_image", key=1, image=bytes(600))
-
-    assert protocol.packet_size == 512
-    assert [len(payload) for payload in payloads] == [513, 513, 513]
-
-
-def test_protocol_v2_uses_1024_byte_hid_reports() -> None:
-    protocol = MiraBoxProtocol(protocol_version=2)
-
-    payloads = protocol.encode_command("set_key_image", key=1, image=bytes(600))
-
-    assert protocol.packet_size == 1024
-    assert [len(payload) for payload in payloads] == [1025, 1025]
-
-
-def test_protocol_v3_uses_1024_byte_hid_reports() -> None:
-    protocol = MiraBoxProtocol(protocol_version=3)
-
-    payloads = protocol.encode_command("set_key_image", key=1, image=bytes(600))
-
-    assert protocol.packet_size == 1024
-    assert [len(payload) for payload in payloads] == [1025, 1025]
+    assert len(payloads) == (4 if version == 1 else 3)
+    assert all(len(payload) == report_size and payload[0] == 0 for payload in payloads)
+    assert payloads[0] == b"\x00CRT\x00\x00BAT\x00\x00\x05\x00\x07".ljust(
+        report_size, b"\x00"
+    )
+    assembled = b"".join(payload[1:] for payload in payloads[1:])
+    assert assembled[: len(image)] == image
+    assert assembled[len(image) :] == bytes(len(assembled) - len(image))
 
 
 def test_compact_bat_image_header_uses_wire_display_id() -> None:

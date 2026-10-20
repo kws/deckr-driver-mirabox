@@ -23,6 +23,9 @@ authority is Concord-only after negotiation. The shared
 protocol flow; this package owns HID discovery, layout evaluation, command
 execution, and device reset.
 
+Short or unrecognized HID reports are ignored; subsequent valid reports continue
+through the layout mapping and hardware input pipeline.
+
 The old discovery inventory, endpoint-presence, and unilateral device-claim
 current-state records are not emitted or consumed.
 
