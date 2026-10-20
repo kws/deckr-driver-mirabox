@@ -16,7 +16,7 @@ from deckr.components import (
     RunContext,
 )
 from deckr.contracts.messages import DeckrMessage
-from deckr.hardware.runtime import HardwareManagerRuntime
+from deckr.hardware import HardwareManagerRuntime
 
 from deckr.drivers.mirabox._discovery import (
     DeviceCommand,

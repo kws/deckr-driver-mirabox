@@ -26,6 +26,10 @@ from deckr.hardware import (
     HardwareClaimDevice,
     HardwareClaimTerms,
 )
+from deckr.hardware.capabilities import (
+    button_activation_value_schema,
+    raster_bitmap_command_schema,
+)
 from message_bus_mocks import mock_deckr
 
 from deckr.drivers.mirabox import _factory as factory_module
@@ -71,6 +75,17 @@ def _device() -> DeviceDescriptor:
             ControlDescriptor(
                 controlId="0,0",
                 kind="key",
+                inputCapabilities=(
+                    CapabilityDescriptor(
+                        capabilityId="button.press",
+                        family="dev.deckr.input.button",
+                        type="activation",
+                        direction="input",
+                        access=("emits",),
+                        eventTypes=("press",),
+                        valueSchema=button_activation_value_schema(),
+                    ),
+                ),
                 outputCapabilities=(
                     CapabilityDescriptor(
                         capabilityId="raster.bitmap",
@@ -79,6 +94,7 @@ def _device() -> DeviceDescriptor:
                         direction="output",
                         access=("settable",),
                         commandTypes=("set_frame", "clear"),
+                        commandSchema=raster_bitmap_command_schema(),
                     ),
                 ),
             ),
@@ -221,7 +237,7 @@ async def test_mirabox_advertises_hardware_and_routes_claimed_input(monkeypatch)
                     device_id="deck",
                     fingerprint="serial-a",
                     control_id="0,0",
-                    capability_id="raster.bitmap",
+                    capability_id="button.press",
                     event_type="press",
                     value={"eventType": "press"},
                 )
