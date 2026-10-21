@@ -15,8 +15,7 @@ from deckr.components import (
     ReadinessState,
     RunContext,
 )
-from deckr.contracts.messages import DeckrMessage
-from deckr.hardware import HardwareManagerRuntime
+from deckr.hardware import HardwareCommandContext, HardwareManagerRuntime
 
 from deckr.drivers.mirabox._discovery import (
     DeviceCommand,
@@ -147,7 +146,11 @@ class MiraboxDeviceFactory(BaseComponent):
         else:
             await self._runtime.handle_hardware_message(event)
 
-    async def _send_device_command(self, envelope: DeckrMessage) -> bool | None:
+    async def _send_device_command(
+        self, context: HardwareCommandContext
+    ) -> bool | None:
+        context.authorize()
+        envelope = context.message
         ref = hw_messages.hardware_device_ref_from_message(envelope)
         if ref is None or ref.manager_id != self.manager_id:
             return None
@@ -162,7 +165,7 @@ class MiraboxDeviceFactory(BaseComponent):
                 ref.device_id,
             )
             return False
-        await command_stream.send(envelope)
+        await command_stream.send(context)
         return True
 
     async def _reset_device(self, device_id: str) -> None:

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import anyio
 import pytest
+from deckr.hardware import HardwareCommandContext
 from deckr.hardware import messages as hw
 
 from deckr.drivers.mirabox._device import MiraBoxDockDevice, run_command_sequence
@@ -28,7 +29,9 @@ class RecordingHid:
         self.reports = reports
         self.writes = []
 
-    async def write_chunks(self, chunks):
+    async def write_chunks(self, chunks, *, context=None):
+        if context is not None:
+            context.authorize()
         self.writes.extend(chunks)
 
     @asynccontextmanager
@@ -75,6 +78,10 @@ async def _apply(device, commands):
     async with receive:
         async with send:
             for command in commands:
+                if not isinstance(command, ResetDeviceCommand):
+                    command = HardwareCommandContext(
+                        command, device.device_descriptor, lambda: None
+                    )
                 await send.send(command)
         await _apply_device_commands(device, receive, "manager")
 

@@ -4,6 +4,7 @@ from functools import cached_property
 from typing import Any
 
 import anyio
+from deckr.hardware import HardwareCommandContext
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +122,15 @@ class _AsyncHidTransport:
         async with self._write_lock:
             return await anyio.to_thread.run_sync(self._dev.write, payload)
 
-    async def write_chunks(self, chunks: list[bytes]) -> None:
+    async def write_chunks(
+        self, chunks: list[bytes], *, context: HardwareCommandContext | None = None
+    ) -> None:
         async with self._write_lock:
             for chunk in chunks:
-                await anyio.to_thread.run_sync(self._dev.write, chunk)
+                if context is None:
+                    await anyio.to_thread.run_sync(self._dev.write, chunk)
+                else:
+                    await context.run_sync(self._dev.write, chunk)
 
     async def get_input_report(self, report_id: int) -> bytes:
         return await anyio.to_thread.run_sync(self._dev.get_input_report, report_id)

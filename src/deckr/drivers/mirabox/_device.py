@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
+from deckr.hardware import HardwareCommandContext, HardwareUnavailable
 from deckr.hardware.capabilities import device_power_command_schema
 from deckr.hardware.descriptors import (
     DECKR_DEVICE_POWER,
@@ -139,29 +140,37 @@ class MiraBoxDockDevice:
             controls=tuple(self.layout.get_controls()),
         )
 
-    async def send_payloads(self, payloads: list[bytes]) -> None:
+    async def send_payloads(
+        self, payloads: list[bytes], *, context: HardwareCommandContext | None = None
+    ) -> None:
         """Send multiple payloads to the device."""
-        await self.transport.write_chunks(payloads)
+        await self.transport.write_chunks(payloads, context=context)
 
-    async def wake_device(self) -> None:
+    async def wake_device(
+        self, *, context: HardwareCommandContext | None = None
+    ) -> None:
         """Wake the screen."""
         payloads = self.protocol.encode_command("wake_display")
-        await self.send_payloads(payloads)
+        await self.send_payloads(payloads, context=context)
 
-    async def sleep_device(self) -> None:
+    async def sleep_device(
+        self, *, context: HardwareCommandContext | None = None
+    ) -> None:
         """Sleep the screen."""
         payloads = self.protocol.encode_command("sleep_display")
-        await self.send_payloads(payloads)
+        await self.send_payloads(payloads, context=context)
 
-    async def clear_key(self, target: int = 0xFF) -> None:
+    async def clear_key(
+        self, target: int = 0xFF, *, context: HardwareCommandContext | None = None
+    ) -> None:
         """Clear a key, or all keys if target is 0xFF."""
         payloads = self.protocol.encode_command("clear_key", target=target)
-        await self.send_payloads(payloads)
+        await self.send_payloads(payloads, context=context)
 
-    async def refresh(self) -> None:
+    async def refresh(self, *, context: HardwareCommandContext | None = None) -> None:
         """Refresh the screen."""
         payloads = self.protocol.encode_command("refresh")
-        await self.send_payloads(payloads)
+        await self.send_payloads(payloads, context=context)
 
     async def connect(self) -> None:
         """Connect to the screen."""
@@ -177,12 +186,20 @@ class MiraBoxDockDevice:
         payloads = self.protocol.encode_command("set_brightness", value=value)
         await self.send_payloads(payloads)
 
-    async def set_raster_frame(self, control_id: str, image: bytes) -> None:
+    async def set_raster_frame(
+        self,
+        control_id: str,
+        image: bytes,
+        *,
+        context: HardwareCommandContext | None = None,
+    ) -> None:
         """Set a raster frame on the private live device."""
-        await self.set_key_image(control_id, image)
-        await self.refresh()
+        await self.set_key_image(control_id, image, context=context)
+        await self.refresh(context=context)
 
-    async def clear_raster(self, control_id: str) -> None:
+    async def clear_raster(
+        self, control_id: str, *, context: HardwareCommandContext | None = None
+    ) -> None:
         """Clear raster output on the private live device."""
         control = self.layout.get_control_for_name(control_id)
         if control is None:
@@ -191,10 +208,16 @@ class MiraBoxDockDevice:
         if not hasattr(control, "display"):
             logger.error(f"Control {control.name} does not have a display")
             return
-        await self.clear_key(target=control.display.id)
-        await self.refresh()
+        await self.clear_key(target=control.display.id, context=context)
+        await self.refresh(context=context)
 
-    async def set_key_image(self, key: str | int, image: bytes) -> None:
+    async def set_key_image(
+        self,
+        key: str | int,
+        image: bytes,
+        *,
+        context: HardwareCommandContext | None = None,
+    ) -> None:
         """Set a key image.
 
         Args:
@@ -214,7 +237,9 @@ class MiraBoxDockDevice:
             "set_key_image", key=control.display.id, image=image
         )
         try:
-            await self.send_payloads(payloads)
+            await self.send_payloads(payloads, context=context)
+        except HardwareUnavailable:
+            raise
         except Exception as e:
             logger.error(f"Error setting key image for key: {key_str}: {e}")
             return

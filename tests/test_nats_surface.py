@@ -38,9 +38,58 @@ from deckr.drivers.mirabox._discovery import (
     DeviceConnected,
     DeviceDisconnected,
     ResetDeviceCommand,
+    _apply_device_commands,
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_cancelled_buffered_command_never_reaches_device(monkeypatch):
+    async with _running_component(monkeypatch) as (deckr, _host, factory, discovery):
+        runtime = factory._runtime
+        await discovery.send.send(DeviceConnected(_device()))
+        await _wait_for_hardware_payload(deckr)
+        send, receive = anyio.create_memory_object_stream(10)
+        writes = []
+
+        class Device:
+            id = "deck"
+
+            async def clear_raster(self, control_id, *, context):
+                writes.append("stale command")
+
+            async def clear_key(self):
+                writes.append("reset")
+
+            async def refresh(self):
+                pass
+
+        async with (
+            send,
+            receive,
+            deckr.endpoint(controller_address("controller-main")) as controller,
+        ):
+            factory._command_streams["deck"] = send
+            contract = await _claim(factory, deckr.concord, controller)
+            command = hw_messages.control_command_message(
+                controller_id="controller-main",
+                sender_session_id=controller.session_id,
+                manager_id="mirabox-main",
+                device_id="deck",
+                control_id="0,0",
+                capability_id="raster.bitmap",
+                command_type="clear",
+                recipient_session_id=runtime.endpoint.session_id,
+                contract=contract.pointer,
+            )
+            assert await runtime._handle_command(command)
+            await deckr.concord._cancel(contract, controller.address, reason="test")
+            await deckr.concord.wait_current()
+            await runtime._reconcile_claims(reason="test cancellation")
+            await send.aclose()
+            await _apply_device_commands(Device(), receive, "mirabox-main")
+            assert writes == ["reset"]
+            factory._command_streams.pop("deck")
 
 
 def _document(*, labels: dict[str, str] | None = None) -> ConfigDocument:
@@ -320,7 +369,7 @@ async def test_mirabox_authorized_commands_and_claim_loss_reset(monkeypatch):
             )
             assert await runtime._handle_command(command)
             with anyio.fail_after(1):
-                assert await command_receive.receive() == command
+                assert (await command_receive.receive()).message == command
 
             await deckr.concord._cancel(contract, controller.address, reason="test")
             await deckr.concord.wait_current()

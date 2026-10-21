@@ -46,6 +46,11 @@ hardware_manager = "kitchen"
 The HID path still assumes report ID `0`. That behavior is preserved during the repo
 split and should only be changed with hardware-backed validation.
 
+Queued output retains the core `HardwareCommandContext`. Each HID report is
+authorized by the core immediately before its blocking write, including after
+waiting for the transport lock or a worker thread. Revoked work is discarded;
+initialization and safe reset remain hardware-local operations.
+
 ## Development
 
 The `deckr` Python distribution now comes from the sibling
@@ -63,7 +68,7 @@ it without the parent workspace source override:
 
 ```bash
 (cd ../deckr-core-python && uv build --wheel)
-uv sync --no-sources --dev --find-links ../deckr-core-python/dist
+uv sync --locked --no-sources --dev --find-links ../deckr-core-python/dist
 uv run --no-sync pytest
 ```
 

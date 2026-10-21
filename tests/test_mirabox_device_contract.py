@@ -24,7 +24,7 @@ class _FakeOutputTransport(_FakeTransport):
         super().__init__()
         self.writes: list[list[bytes]] = []
 
-    async def write_chunks(self, chunks: list[bytes]) -> None:
+    async def write_chunks(self, chunks: list[bytes], *, context=None) -> None:
         self.writes.append(chunks)
 
 
